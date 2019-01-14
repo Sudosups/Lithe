@@ -29,18 +29,7 @@ public:
   uint64_t publicAddressBase58Prefix() const { return m_publicAddressBase58Prefix; }
   uint32_t minedMoneyUnlockWindow() const { return m_minedMoneyUnlockWindow; }
 
-  size_t timestampCheckWindow(uint32_t blockHeight) const
-  {
-      if (blockHeight >= CryptoNote::parameters::LWMA_2_DIFFICULTY_BLOCK_INDEX_V3)
-      {
-          return CryptoNote::parameters::BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW_V3;
-      }
-      else
-      {
-          return m_timestampCheckWindow;
-      }
-  }
-
+  size_t timestampCheckWindow(uint32_t blockHeight) const { return m_timestampCheckWindow; }
   uint64_t blockFutureTimeLimit(uint32_t blockHeight) const { return m_blockFutureTimeLimit; }
 
   uint64_t moneySupply() const { return m_moneySupply; }
