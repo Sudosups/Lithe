@@ -3,6 +3,7 @@
 // Copyright (c) 2018, The BBSCoin Developers
 // Copyright (c) 2018, The Karbo Developers
 // Copyright (c) 2018, The TurtleCoin Developers
+// Copyright (c) 2018, The Lithe Project
 //
 // Please see the included LICENSE file for more information.
 
@@ -1195,9 +1196,7 @@ uint64_t WalletGreen::getCurrentTimestampAdjusted()
     /* Take the amount of time a block can potentially be in the past/future */
     std::initializer_list<uint64_t> limits =
     {
-        CryptoNote::parameters::CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT,
-        CryptoNote::parameters::CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT_V3,
-        CryptoNote::parameters::CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT_V4
+        CryptoNote::parameters::CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT
     };
 
     /* Get the largest adjustment possible */
