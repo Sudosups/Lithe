@@ -60,9 +60,7 @@ const uint64_t EXPECTED_NUMBER_OF_BLOCKS_PER_DAY             = 24 * 60 * 60 / DI
 const size_t   DIFFICULTY_WINDOW                             = 60;
 const uint64_t DIFFICULTY_BLOCKS_COUNT_V3                    = DIFFICULTY_WINDOW + 1;
 
-const size_t   DIFFICULTY_CUT                                = 0;  // timestamps to cut after sorting
-const size_t   DIFFICULTY_CUT_V1                             = 60;
-const size_t   DIFFICULTY_CUT_V2                             = 60;
+const size_t   DIFFICULTY_CUT                                = 60;  // timestamps to cut after sorting
 const size_t   DIFFICULTY_LAG                                = 0;  // !!!
 const size_t   DIFFICULTY_LAG_V1                             = 15;
 const size_t   DIFFICULTY_LAG_V2                             = 15;
