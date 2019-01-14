@@ -48,22 +48,8 @@ public:
   uint64_t coin() const { return m_coin; }
 
   uint64_t minimumFee() const { return m_mininumFee; }
-  uint64_t defaultDustThreshold(uint32_t height) const {
-      if (height >= CryptoNote::parameters::DUST_THRESHOLD_V2_HEIGHT)
-      {
-          return CryptoNote::parameters::DEFAULT_DUST_THRESHOLD_V2;
-      }
-
-      return m_defaultDustThreshold;
-  }
-  uint64_t defaultFusionDustThreshold(uint32_t height) const {
-      if (height >= CryptoNote::parameters::FUSION_DUST_THRESHOLD_HEIGHT_V2)
-      {
-          return CryptoNote::parameters::DEFAULT_DUST_THRESHOLD_V2;
-      }
-
-      return m_defaultDustThreshold;
-  }
+  uint64_t defaultDustThreshold(uint32_t height) const { return m_defaultDustThreshold; }
+  uint64_t defaultFusionDustThreshold(uint32_t height) const { return m_defaultDustThreshold; }
 
   uint64_t difficultyTarget() const { return m_difficultyTarget; }
   size_t difficultyWindow() const { return m_difficultyWindow; }
