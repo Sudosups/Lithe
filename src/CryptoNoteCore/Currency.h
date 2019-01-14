@@ -1,6 +1,7 @@
 // Copyright (c) 2012-2017, The CryptoNote developers, The Bytecoin developers
 // Copyright (c) 2014-2018, The Monero Project
 // Copyright (c) 2018, The TurtleCoin Developers
+// Copyright (c) 2018, The Lithe Project
 //
 // Please see the included LICENSE file for more information.
 
@@ -40,21 +41,7 @@ public:
       }
   }
 
-  uint64_t blockFutureTimeLimit(uint32_t blockHeight) const
-  {
-      if (blockHeight >= CryptoNote::parameters::LWMA_2_DIFFICULTY_BLOCK_INDEX_V2)
-      {
-          return CryptoNote::parameters::CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT_V4;
-      }
-      else if (blockHeight >= CryptoNote::parameters::LWMA_2_DIFFICULTY_BLOCK_INDEX)
-      {
-          return CryptoNote::parameters::CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT_V3;
-      }
-      else
-      {
-          return m_blockFutureTimeLimit;
-      }
-  }
+  uint64_t blockFutureTimeLimit(uint32_t blockHeight) const { return m_blockFutureTimeLimit; }
 
   uint64_t moneySupply() const { return m_moneySupply; }
   unsigned int emissionSpeedFactor() const { return m_emissionSpeedFactor; }
