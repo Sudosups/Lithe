@@ -105,23 +105,26 @@ bool Currency::generateGenesisBlock() {
 size_t Currency::difficultyWindowByBlockVersion(uint8_t blockMajorVersion) const {
   if (blockMajorVersion >= BLOCK_MAJOR_VERSION_1) {
     return m_difficultyWindow;
+  }
 }
 
 size_t Currency::difficultyLagByBlockVersion(uint8_t blockMajorVersion) const {
   if (blockMajorVersion >= BLOCK_MAJOR_VERSION_1) {
     return m_difficultyLag;
+  }
 }
 
 size_t Currency::difficultyCutByBlockVersion(uint8_t blockMajorVersion) const {
   if (blockMajorVersion >= BLOCK_MAJOR_VERSION_1) {
     return m_difficultyCut;
+  }
 }
 
 size_t Currency::difficultyBlocksCountByBlockVersion(uint8_t blockMajorVersion, uint32_t height) const
 {
     if (height >= CryptoNote::parameters::LWMA_2_DIFFICULTY_BLOCK_INDEX)
     {
-        return CryptoNote::parameters::DIFFICULTY_BLOCKS_COUNT_V3;
+        return CryptoNote::parameters::DIFFICULTY_BLOCKS_COUNT;
     }
 
     return difficultyWindowByBlockVersion(blockMajorVersion) + difficultyLagByBlockVersion(blockMajorVersion);
@@ -130,6 +133,7 @@ size_t Currency::difficultyBlocksCountByBlockVersion(uint8_t blockMajorVersion, 
 size_t Currency::blockGrantedFullRewardZoneByBlockVersion(uint8_t blockMajorVersion) const {
   if (blockMajorVersion >= BLOCK_MAJOR_VERSION_1) {
     return m_blockGrantedFullRewardZone;
+  }
 }
 
 uint32_t Currency::upgradeHeight(uint8_t majorVersion) const {
@@ -414,7 +418,7 @@ uint64_t Currency::nextDifficulty(uint8_t version, uint32_t blockIndex, std::vec
   std::vector<uint64_t> cumulativeDifficulties) const {
 
     int64_t T = CryptoNote::parameters::DIFFICULTY_TARGET;
-    int64_t N = CryptoNote::parameters::DIFFICULTY_WINDOW_V3;
+    int64_t N = CryptoNote::parameters::DIFFICULTY_WINDOW;
     int64_t L(0), ST, sum_3_ST(0), next_D, prev_D;
 
     /* If we are starting up, returning a difficulty guess. If you are a
