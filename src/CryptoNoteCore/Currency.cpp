@@ -108,13 +108,8 @@ size_t Currency::difficultyWindowByBlockVersion(uint8_t blockMajorVersion) const
 }
 
 size_t Currency::difficultyLagByBlockVersion(uint8_t blockMajorVersion) const {
-  if (blockMajorVersion >= BLOCK_MAJOR_VERSION_3) {
+  if (blockMajorVersion >= BLOCK_MAJOR_VERSION_1) {
     return m_difficultyLag;
-  } else if (blockMajorVersion == BLOCK_MAJOR_VERSION_2) {
-    return CryptoNote::parameters::DIFFICULTY_LAG_V2;
-  } else {
-    return CryptoNote::parameters::DIFFICULTY_LAG_V1;
-  }
 }
 
 size_t Currency::difficultyCutByBlockVersion(uint8_t blockMajorVersion) const {

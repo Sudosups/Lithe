@@ -61,10 +61,7 @@ const size_t   DIFFICULTY_WINDOW                             = 60;
 const uint64_t DIFFICULTY_BLOCKS_COUNT_V3                    = DIFFICULTY_WINDOW + 1;
 
 const size_t   DIFFICULTY_CUT                                = 60;  // timestamps to cut after sorting
-const size_t   DIFFICULTY_LAG                                = 0;  // !!!
-const size_t   DIFFICULTY_LAG_V1                             = 15;
-const size_t   DIFFICULTY_LAG_V2                             = 15;
-static_assert(2 * DIFFICULTY_CUT <= DIFFICULTY_WINDOW - 2, "Bad DIFFICULTY_WINDOW or DIFFICULTY_CUT");
+const size_t   DIFFICULTY_LAG                                = 15;
 
 const size_t   MAX_BLOCK_SIZE_INITIAL                        = 100000;
 const uint64_t MAX_BLOCK_SIZE_GROWTH_SPEED_NUMERATOR         = 100 * 1024;
