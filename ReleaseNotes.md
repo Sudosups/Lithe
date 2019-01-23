@@ -5,3 +5,4 @@
 - Massively cleaned up codebase
 - LITHE rebrand
 - AppVeyor CI integration
+- New block size algorithm
