@@ -32,7 +32,7 @@ const size_t   BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW             = 11;
 const uint64_t MONEY_SUPPLY                                  = UINT64_C(250000000000000);
 const uint32_t LWMA_2_DIFFICULTY_BLOCK_INDEX                 = 0;
 
-const unsigned EMISSION_SPEED_FACTOR                         = 30;
+const unsigned EMISSION_SPEED_FACTOR                         = 25;
 static_assert(EMISSION_SPEED_FACTOR <= 8 * sizeof(uint64_t), "Bad EMISSION_SPEED_FACTOR");
 
 /* Premine amount */
