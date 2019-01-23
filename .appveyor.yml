@@ -22,7 +22,7 @@ build_script:
 
 after_build:
   - clcache -s
-  - if not defined APPVEYOR_REPO_TAG_NAME (set APPVEYOR_REPO_TAG_NAME=%APPVEYOR_REPO_COMMIT%)
+  - if not defined APPVEYOR_REPO_TAG_NAME (set APPVEYOR_REPO_TAG_NAME=%APPVEYOR_BUILD_NUMBER%)
   - cd src\Release
   - mkdir lithe-%APPVEYOR_REPO_TAG_NAME%
   - copy *.exe lithe-%APPVEYOR_REPO_TAG_NAME%
@@ -31,5 +31,5 @@ after_build:
   - copy lithe-%APPVEYOR_REPO_TAG_NAME%-windows.zip ..\..\..\
 
 artifacts:
-  - path: lithe-$(APPVEYOR_REPO_COMMIT)-windows.zip
+  - path: lithe-$(APPVEYOR_BUILD_NUMBER)-windows.zip
     name: Lithe
