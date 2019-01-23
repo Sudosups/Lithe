@@ -102,10 +102,20 @@ inline IBlockchainCache* findIndexInChain(IBlockchainCache* blockSegment, uint32
   return nullptr;
 }
 
-size_t getMaximumTransactionAllowedSize(size_t blockSizeMedian, const Currency& currency) {
-  assert(blockSizeMedian * 2 > currency.minerTxBlobReservedSize());
+size_t getMaximumTransactionAllowedSize(size_t blockSizeMedian, const Currency& currency, uint32_t height) {
+  size_t medianBasedMaxSize = blockSizeMedian * 2;
+  assert(medianBasedMaxSize > currency.minerTxBlobReservedSize());
 
-  return blockSizeMedian * 2 - currency.minerTxBlobReservedSize();
+uint32_t maxPopulatedHeight = height + 5;
+  const size_t heightBasedMaxSize = currency.maxBlockCumulativeSize(maxPopulatedHeight)
+    currency.minerTxBlobReservedSize();
+
+  if(medianBasedMaxSize < currency.minerTxBlobReservedSize())
+    medianBasedMaxSize = heightBasedMaxSize;
+  else
+    medianBasedMaxSize = medianBasedMaxSize - currency.minerTxBlobReservedSize();
+
+  return std::min(medianBasedMaxSize, heightBasedMaxSize);
 }
 
 BlockTemplate extractBlockTemplate(const RawBlock& block) {
