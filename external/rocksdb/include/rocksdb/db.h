@@ -6,8 +6,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-#ifndef STORAGE_ROCKSDB_INCLUDE_DB_H_
-#define STORAGE_ROCKSDB_INCLUDE_DB_H_
+#pragma once
 
 #include <stdint.h>
 #include <stdio.h>
@@ -53,6 +52,10 @@ struct ExternalSstFileInfo;
 class WriteBatch;
 class Env;
 class EventListener;
+class TraceWriter;
+#ifdef ROCKSDB_LITE
+class CompactionJobInfo;
+#endif
 
 using std::unique_ptr;
 
@@ -287,16 +290,12 @@ class DB {
   // a non-OK status on error. It is not an error if no keys exist in the range
   // ["begin_key", "end_key").
   //
-  // This feature is currently an experimental performance optimization for
-  // deleting very large ranges of contiguous keys. Invoking it many times or on
-  // small ranges may severely degrade read performance; in particular, the
-  // resulting performance can be worse than calling Delete() for each key in
-  // the range. Note also the degraded read performance affects keys outside the
-  // deleted ranges, and affects database operations involving scans, like flush
-  // and compaction.
-  //
-  // Consider setting ReadOptions::ignore_range_deletions = true to speed
-  // up reads for key(s) that are known to be unaffected by range deletions.
+  // This feature is now usable in production, with the following caveats:
+  // 1) Accumulating many range tombstones in the memtable will degrade read
+  // performance; this can be avoided by manually flushing occasionally.
+  // 2) Limiting the maximum number of open files in the presence of range
+  // tombstones can degrade read performance. To avoid this problem, set
+  // max_open_files to -1 whenever possible.
   virtual Status DeleteRange(const WriteOptions& options,
                              ColumnFamilyHandle* column_family,
                              const Slice& begin_key, const Slice& end_key);
@@ -572,6 +571,11 @@ class DB {
     //      log files that should be kept.
     static const std::string kMinLogNumberToKeep;
 
+    //  "rocksdb.min-obsolete-sst-number-to-keep" - return the minimum file
+    //      number for an obsolete SST to be kept. The max value of `uint64_t`
+    //      will be returned if all obsolete files can be deleted.
+    static const std::string kMinObsoleteSstNumberToKeep;
+
     //  "rocksdb.total-sst-files-size" - returns total size (bytes) of all SST
     //      files.
     //  WARNING: may slow down online queries if there are too many files.
@@ -670,6 +674,7 @@ class DB {
   //  "rocksdb.current-super-version-number"
   //  "rocksdb.estimate-live-data-size"
   //  "rocksdb.min-log-number-to-keep"
+  //  "rocksdb.min-obsolete-sst-number-to-keep"
   //  "rocksdb.total-sst-files-size"
   //  "rocksdb.live-sst-files-size"
   //  "rocksdb.base-level"
@@ -832,18 +837,20 @@ class DB {
   virtual Status CompactFiles(
       const CompactionOptions& compact_options,
       ColumnFamilyHandle* column_family,
-      const std::vector<std::string>& input_file_names,
-      const int output_level, const int output_path_id = -1,
-      std::vector<std::string>* const output_file_names = nullptr) = 0;
+      const std::vector<std::string>& input_file_names, const int output_level,
+      const int output_path_id = -1,
+      std::vector<std::string>* const output_file_names = nullptr,
+      CompactionJobInfo* compaction_job_info = nullptr) = 0;
 
   virtual Status CompactFiles(
       const CompactionOptions& compact_options,
-      const std::vector<std::string>& input_file_names,
-      const int output_level, const int output_path_id = -1,
-      std::vector<std::string>* const output_file_names = nullptr) {
+      const std::vector<std::string>& input_file_names, const int output_level,
+      const int output_path_id = -1,
+      std::vector<std::string>* const output_file_names = nullptr,
+      CompactionJobInfo* compaction_job_info = nullptr) {
     return CompactFiles(compact_options, DefaultColumnFamily(),
                         input_file_names, output_level, output_path_id,
-                        output_file_names);
+                        output_file_names, compaction_job_info);
   }
 
   // This function will wait until all currently running background processes
@@ -900,11 +907,22 @@ class DB {
   virtual DBOptions GetDBOptions() const = 0;
 
   // Flush all mem-table data.
+  // Flush a single column family, even when atomic flush is enabled. To flush
+  // multiple column families, use Flush(options, column_families).
   virtual Status Flush(const FlushOptions& options,
                        ColumnFamilyHandle* column_family) = 0;
   virtual Status Flush(const FlushOptions& options) {
     return Flush(options, DefaultColumnFamily());
   }
+  // Flushes multiple column families.
+  // If atomic flush is not enabled, Flush(options, column_families) is
+  // equivalent to calling Flush(options, column_family) multiple times.
+  // If atomic flush is enabled, Flush(options, column_families) will flush all
+  // column families specified in 'column_families' up to the latest sequence
+  // number at the time when flush is requested.
+  virtual Status Flush(
+      const FlushOptions& options,
+      const std::vector<ColumnFamilyHandle*>& column_families) = 0;
 
   // Flush the WAL memory buffer to the file. If sync is true, it calls SyncWAL
   // afterwards.
@@ -949,14 +967,14 @@ class DB {
   // GetLiveFiles followed by GetSortedWalFiles can generate a lossless backup
 
   // Retrieve the list of all files in the database. The files are
-  // relative to the dbname and are not absolute paths. The valid size of the
-  // manifest file is returned in manifest_file_size. The manifest file is an
-  // ever growing file, but only the portion specified by manifest_file_size is
-  // valid for this snapshot.
-  // Setting flush_memtable to true does Flush before recording the live files.
-  // Setting flush_memtable to false is useful when we don't want to wait for
-  // flush which may have to wait for compaction to complete taking an
-  // indeterminate time.
+  // relative to the dbname and are not absolute paths. Despite being relative
+  // paths, the file names begin with "/". The valid size of the manifest file
+  // is returned in manifest_file_size. The manifest file is an ever growing
+  // file, but only the portion specified by manifest_file_size is valid for
+  // this snapshot. Setting flush_memtable to true does Flush before recording
+  // the live files. Setting flush_memtable to false is useful when we don't
+  // want to wait for flush which may have to wait for compaction to complete
+  // taking an indeterminate time.
   //
   // In case you have multiple column families, even if flush_memtable is true,
   // you still need to call GetSortedWalFiles after GetLiveFiles to compensate
@@ -979,9 +997,9 @@ class DB {
   // cleared aggressively and the iterator might keep getting invalid before
   // an update is read.
   virtual Status GetUpdatesSince(
-      SequenceNumber seq_number, unique_ptr<TransactionLogIterator>* iter,
-      const TransactionLogIterator::ReadOptions&
-          read_options = TransactionLogIterator::ReadOptions()) = 0;
+      SequenceNumber seq_number, std::unique_ptr<TransactionLogIterator>* iter,
+      const TransactionLogIterator::ReadOptions& read_options =
+          TransactionLogIterator::ReadOptions()) = 0;
 
 // Windows API macro interference
 #undef DeleteFile
@@ -996,11 +1014,6 @@ class DB {
       std::vector<LiveFileMetaData>* /*metadata*/) {}
 
   // Obtains the meta data of the specified column family of the DB.
-  // Status::NotFound() will be returned if the current DB does not have
-  // any column family match the specified name.
-  //
-  // If cf_name is not specified, then the metadata of the default
-  // column family will be returned.
   virtual void GetColumnFamilyMetaData(ColumnFamilyHandle* /*column_family*/,
                                        ColumnFamilyMetaData* /*metadata*/) {}
 
@@ -1173,6 +1186,15 @@ class DB {
     return Status::NotSupported("PromoteL0() is not implemented.");
   }
 
+  // Trace DB operations. Use EndTrace() to stop tracing.
+  virtual Status StartTrace(const TraceOptions& /*options*/,
+                            std::unique_ptr<TraceWriter>&& /*trace_writer*/) {
+    return Status::NotSupported("StartTrace() is not implemented.");
+  }
+
+  virtual Status EndTrace() {
+    return Status::NotSupported("EndTrace() is not implemented.");
+  }
 #endif  // ROCKSDB_LITE
 
   // Needed for StackableDB
@@ -1216,5 +1238,3 @@ Status RepairDB(const std::string& dbname, const Options& options);
 #endif
 
 }  // namespace rocksdb
-
-#endif  // STORAGE_ROCKSDB_INCLUDE_DB_H_

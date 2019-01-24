@@ -24,11 +24,33 @@ Status WriteUnpreparedTxnDB::RollbackRecoveredTransaction(
   assert(rtxn->unprepared_);
   auto cf_map_shared_ptr = WritePreparedTxnDB::GetCFHandleMap();
   auto cf_comp_map_shared_ptr = WritePreparedTxnDB::GetCFComparatorMap();
-  const bool kRollbackMergeOperands = true;
   WriteOptions w_options;
   // If we crash during recovery, we can just recalculate and rewrite the
   // rollback batch.
   w_options.disableWAL = true;
+
+  class InvalidSnapshotReadCallback : public ReadCallback {
+   public:
+    InvalidSnapshotReadCallback(WritePreparedTxnDB* db, SequenceNumber snapshot,
+                                SequenceNumber min_uncommitted)
+        : db_(db), snapshot_(snapshot), min_uncommitted_(min_uncommitted) {}
+
+    // Will be called to see if the seq number visible; if not it moves on to
+    // the next seq number.
+    inline virtual bool IsVisible(SequenceNumber seq) override {
+      // Becomes true if it cannot tell by comparing seq with snapshot seq since
+      // the snapshot_ is not a real snapshot.
+      bool released = false;
+      auto ret = db_->IsInSnapshot(seq, snapshot_, min_uncommitted_, &released);
+      assert(!released || ret);
+      return ret;
+    }
+
+   private:
+    WritePreparedTxnDB* db_;
+    SequenceNumber snapshot_;
+    SequenceNumber min_uncommitted_;
+  };
 
   // Iterate starting with largest sequence number.
   for (auto it = rtxn->batches_.rbegin(); it != rtxn->batches_.rend(); it++) {
@@ -39,7 +61,7 @@ Status WriteUnpreparedTxnDB::RollbackRecoveredTransaction(
     struct RollbackWriteBatchBuilder : public WriteBatch::Handler {
       DBImpl* db_;
       ReadOptions roptions;
-      WritePreparedTxnReadCallback callback;
+      InvalidSnapshotReadCallback callback;
       WriteBatch* rollback_batch_;
       std::map<uint32_t, const Comparator*>& comparators_;
       std::map<uint32_t, ColumnFamilyHandle*>& handles_;
@@ -131,7 +153,7 @@ Status WriteUnpreparedTxnDB::RollbackRecoveredTransaction(
       }
     } rollback_handler(db_impl_, this, last_visible_txn, &rollback_batch,
                        *cf_comp_map_shared_ptr.get(), *cf_map_shared_ptr.get(),
-                       !kRollbackMergeOperands);
+                       txn_db_options_.rollback_merge_operands);
 
     auto s = batch->Iterate(&rollback_handler);
     if (!s.ok()) {
@@ -240,7 +262,7 @@ Status WriteUnpreparedTxnDB::Initialize(
     TransactionOptions t_options;
 
     auto first_log_number = recovered_trx->batches_.begin()->second.log_number_;
-    auto last_seq = recovered_trx->batches_.rbegin()->first;
+    auto first_seq = recovered_trx->batches_.begin()->first;
     auto last_prepare_batch_cnt =
         recovered_trx->batches_.begin()->second.batch_cnt_;
 
@@ -250,7 +272,7 @@ Status WriteUnpreparedTxnDB::Initialize(
         static_cast_with_check<WriteUnpreparedTxn, Transaction>(real_trx);
 
     real_trx->SetLogNumber(first_log_number);
-    real_trx->SetId(last_seq);
+    real_trx->SetId(first_seq);
     s = real_trx->SetName(recovered_trx->name_);
     if (!s.ok()) {
       break;
@@ -268,6 +290,13 @@ Status WriteUnpreparedTxnDB::Initialize(
       }
       assert(wupt->unprep_seqs_.count(seq) == 0);
       wupt->unprep_seqs_[seq] = cnt;
+      KeySetBuilder keyset_handler(wupt,
+                                   txn_db_options_.rollback_merge_operands);
+      s = batch_info.batch_->Iterate(&keyset_handler);
+      assert(s.ok());
+      if (!s.ok()) {
+        break;
+      }
     }
 
     wupt->write_batch_.Clear();
@@ -364,6 +393,30 @@ Iterator* WriteUnpreparedTxnDB::NewIterator(const ReadOptions& options,
                                 !ALLOW_BLOB, !ALLOW_REFRESH);
   db_iter->RegisterCleanup(CleanupWriteUnpreparedTxnDBIterator, state, nullptr);
   return db_iter;
+}
+
+Status KeySetBuilder::PutCF(uint32_t cf, const Slice& key,
+                            const Slice& /*val*/) {
+  txn_->UpdateWriteKeySet(cf, key);
+  return Status::OK();
+}
+
+Status KeySetBuilder::DeleteCF(uint32_t cf, const Slice& key) {
+  txn_->UpdateWriteKeySet(cf, key);
+  return Status::OK();
+}
+
+Status KeySetBuilder::SingleDeleteCF(uint32_t cf, const Slice& key) {
+  txn_->UpdateWriteKeySet(cf, key);
+  return Status::OK();
+}
+
+Status KeySetBuilder::MergeCF(uint32_t cf, const Slice& key,
+                              const Slice& /*val*/) {
+  if (rollback_merge_operands_) {
+    txn_->UpdateWriteKeySet(cf, key);
+  }
+  return Status::OK();
 }
 
 }  //  namespace rocksdb

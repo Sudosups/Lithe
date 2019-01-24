@@ -93,17 +93,36 @@ ifeq ($(MAKECMDGOALS),rocksdbjavastaticpublish)
 	DEBUG_LEVEL=0
 endif
 
+# Lite build flag.
+LITE ?= 0
+ifeq ($(LITE), 0)
+ifneq ($(filter -DROCKSDB_LITE,$(OPT)),)
+  # Be backward compatible and support older format where OPT=-DROCKSDB_LITE is
+  # specified instead of LITE=1 on the command line.
+  LITE=1
+endif
+else ifeq ($(LITE), 1)
+ifeq ($(filter -DROCKSDB_LITE,$(OPT)),)
+	OPT += -DROCKSDB_LITE
+endif
+endif
+
+# Figure out optimize level.
+ifneq ($(DEBUG_LEVEL), 2)
+ifeq ($(LITE), 0)
+	OPT += -O2
+else
+	OPT += -Os
+endif
+endif
+
 # compile with -O2 if debug level is not 2
 ifneq ($(DEBUG_LEVEL), 2)
-OPT += -O2 -fno-omit-frame-pointer
+OPT += -fno-omit-frame-pointer
 # Skip for archs that don't support -momit-leaf-frame-pointer
 ifeq (,$(shell $(CXX) -fsyntax-only -momit-leaf-frame-pointer -xc /dev/null 2>&1))
 OPT += -momit-leaf-frame-pointer
 endif
-endif
-
-ifeq (,$(shell $(CXX) -fsyntax-only -faligned-new -xc++ /dev/null 2>&1))
-CXXFLAGS += -faligned-new -DHAVE_ALIGNED_NEW
 endif
 
 ifeq (,$(shell $(CXX) -fsyntax-only -maltivec -xc /dev/null 2>&1))
@@ -179,7 +198,7 @@ include make_config.mk
 CLEAN_FILES += make_config.mk
 
 missing_make_config_paths := $(shell				\
-	grep "\/\S*" -o $(CURDIR)/make_config.mk | 		\
+	grep "\./\S*\|/\S*" -o $(CURDIR)/make_config.mk | 	\
 	while read path;					\
 		do [ -e $$path ] || echo $$path; 		\
 	done | sort | uniq)
@@ -295,6 +314,11 @@ ifeq ($(PLATFORM), OS_OPENBSD)
 	WARNING_FLAGS += -Wno-unused-lambda-capture
 endif
 
+ifndef DISABLE_WARNING_AS_ERROR
+	WARNING_FLAGS += -Werror
+endif
+
+
 ifdef LUA_PATH
 
 ifndef LUA_INCLUDE
@@ -317,7 +341,7 @@ endif
 ifeq ("$(wildcard $(LUA_LIB))", "") # LUA_LIB does not exist
 $(error $(LUA_LIB) does not exist.  Try to specify both LUA_PATH and LUA_LIB manually)
 endif
-LDFLAGS += $(LUA_LIB)
+EXEC_LDFLAGS += $(LUA_LIB)
 
 endif
 
@@ -377,7 +401,9 @@ VALGRIND_OPTS = --error-exitcode=$(VALGRIND_ERROR) --leak-check=full
 
 BENCHTOOLOBJECTS = $(BENCH_LIB_SOURCES:.cc=.o) $(LIBOBJECTS) $(TESTUTIL)
 
-EXPOBJECTS = $(EXP_LIB_SOURCES:.cc=.o) $(LIBOBJECTS) $(TESTUTIL)
+ANALYZETOOLOBJECTS = $(ANALYZER_LIB_SOURCES:.cc=.o)
+
+EXPOBJECTS = $(LIBOBJECTS) $(TESTUTIL)
 
 TESTS = \
 	db_basic_test \
@@ -432,6 +458,7 @@ TESTS = \
 	table_properties_collector_test \
 	arena_test \
 	block_test \
+	data_block_hash_index_test \
 	cache_test \
 	corruption_test \
 	slice_transform_test \
@@ -455,7 +482,6 @@ TESTS = \
 	merger_test \
 	util_merge_operators_test \
 	options_file_test \
-	redis_test \
 	reduce_levels_test \
 	plain_table_db_test \
 	comparator_db_test \
@@ -469,12 +495,8 @@ TESTS = \
 	cassandra_row_merge_test \
 	cassandra_serialize_test \
 	ttl_test \
-	date_tiered_test \
 	backupable_db_test \
-	document_db_test \
-	json_document_test \
 	sim_cache_test \
-	spatial_db_test \
 	version_edit_test \
 	version_set_test \
 	compaction_picker_test \
@@ -486,7 +508,6 @@ TESTS = \
 	deletefile_test \
 	obsolete_files_test \
 	table_test \
-	geodb_test \
 	delete_scheduler_test \
 	options_test \
 	options_settable_test \
@@ -503,7 +524,6 @@ TESTS = \
 	compaction_job_test \
 	thread_list_test \
 	sst_dump_test \
-	column_aware_encoding_test \
 	compact_files_test \
 	optimistic_transaction_test \
 	write_callback_test \
@@ -516,7 +536,6 @@ TESTS = \
 	persistent_cache_test \
 	statistics_test \
 	lua_test \
-	range_del_aggregator_test \
 	lru_cache_test \
 	object_registry_test \
 	repair_test \
@@ -524,6 +543,11 @@ TESTS = \
 	write_prepared_transaction_test \
 	write_unprepared_transaction_test \
 	db_universal_compaction_test \
+	trace_analyzer_test \
+	repeatable_thread_test \
+	range_tombstone_fragmenter_test \
+	range_del_aggregator_test \
+	sst_file_reader_test \
 
 PARALLEL_TEST = \
 	backupable_db_test \
@@ -567,12 +591,13 @@ TOOLS = \
 	rocksdb_dump \
 	rocksdb_undump \
 	blob_dump \
+	trace_analyzer \
 
 TEST_LIBS = \
 	librocksdb_env_basic_test.a
 
 # TODO: add back forward_iterator_bench, after making it build in all environemnts.
-BENCHMARKS = db_bench table_reader_bench cache_bench memtablerep_bench column_aware_encoding_exp persistent_cache_bench
+BENCHMARKS = db_bench table_reader_bench cache_bench memtablerep_bench persistent_cache_bench range_del_aggregator_bench
 
 # if user didn't config LIBNAME, set the default
 ifeq ($(LIBNAME),)
@@ -660,7 +685,7 @@ $(SHARED4): $(shared_all_libobjects)
 endif  # PLATFORM_SHARED_EXT
 
 .PHONY: blackbox_crash_test check clean coverage crash_test ldb_tests package \
-	release tags valgrind_check whitebox_crash_test format static_lib shared_lib all \
+	release tags tags0 valgrind_check whitebox_crash_test format static_lib shared_lib all \
 	dbg rocksdbjavastatic rocksdbjava install install-static install-shared uninstall \
 	analyze tools tools_lib
 
@@ -873,6 +898,7 @@ crash_test: whitebox_crash_test blackbox_crash_test
 
 blackbox_crash_test: db_stress
 	python -u tools/db_crashtest.py --simple blackbox $(CRASH_TEST_EXT_ARGS)
+	python -u tools/db_crashtest.py --enable_atomic_flush blackbox $(CRASH_TEST_EXT_ARGS)
 	python -u tools/db_crashtest.py blackbox $(CRASH_TEST_EXT_ARGS)
 
 ifeq ($(CRASH_TEST_KILL_ODD),)
@@ -881,6 +907,8 @@ endif
 
 whitebox_crash_test: db_stress
 	python -u tools/db_crashtest.py --simple whitebox --random_kill_odd \
+      $(CRASH_TEST_KILL_ODD) $(CRASH_TEST_EXT_ARGS)
+	python -u tools/db_crashtest.py --enable_atomic_flush whitebox  --random_kill_odd \
       $(CRASH_TEST_KILL_ODD) $(CRASH_TEST_EXT_ARGS)
 	python -u tools/db_crashtest.py whitebox  --random_kill_odd \
       $(CRASH_TEST_KILL_ODD) $(CRASH_TEST_EXT_ARGS)
@@ -992,8 +1020,10 @@ unity.a: unity.o
 	$(AM_V_AR)rm -f $@
 	$(AM_V_at)$(AR) $(ARFLAGS) $@ unity.o
 
+
+TOOLLIBOBJECTS = $(TOOL_LIB_SOURCES:.cc=.o)
 # try compiling db_test with unity
-unity_test: db/db_test.o db/db_test_util.o $(TESTHARNESS) unity.a
+unity_test: db/db_test.o db/db_test_util.o $(TESTHARNESS) $(TOOLLIBOBJECTS) unity.a
 	$(AM_LINK)
 	./unity_test
 
@@ -1013,6 +1043,13 @@ tags:
 	cscope -b `$(FIND) . -name '*.cc'` `$(FIND) . -name '*.h'` `$(FIND) . -name '*.c'`
 	ctags -e -R -o etags *
 
+tags0:
+	ctags -R .
+	cscope -b `$(FIND) . -name '*.cc' -and ! -name '*_test.cc'` \
+		  `$(FIND) . -name '*.c' -and ! -name '*_test.c'` \
+		  `$(FIND) . -name '*.h' -and ! -name '*_test.h'`
+	ctags -e -R -o etags *
+
 format:
 	build_tools/format-diff.sh
 
@@ -1026,7 +1063,7 @@ $(LIBRARY): $(LIBOBJECTS)
 	$(AM_V_AR)rm -f $@
 	$(AM_V_at)$(AR) $(ARFLAGS) $@ $(LIBOBJECTS)
 
-$(TOOLS_LIBRARY): $(BENCH_LIB_SOURCES:.cc=.o) $(TOOL_LIB_SOURCES:.cc=.o) $(LIB_SOURCES:.cc=.o) $(TESTUTIL)
+$(TOOLS_LIBRARY): $(BENCH_LIB_SOURCES:.cc=.o) $(TOOL_LIB_SOURCES:.cc=.o) $(LIB_SOURCES:.cc=.o) $(TESTUTIL) $(ANALYZER_LIB_SOURCES:.cc=.o)
 	$(AM_V_AR)rm -f $@
 	$(AM_V_at)$(AR) $(ARFLAGS) $@ $^
 
@@ -1035,6 +1072,9 @@ librocksdb_env_basic_test.a: env/env_basic_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_V_at)$(AR) $(ARFLAGS) $@ $^
 
 db_bench: tools/db_bench.o $(BENCHTOOLOBJECTS)
+	$(AM_LINK)
+
+trace_analyzer: tools/trace_analyzer.o $(ANALYZETOOLOBJECTS) $(LIBOBJECTS)
 	$(AM_LINK)
 
 cache_bench: cache/cache_bench.o $(LIBOBJECTS) $(TESTUTIL)
@@ -1104,9 +1144,6 @@ cassandra_row_merge_test: utilities/cassandra/cassandra_row_merge_test.o utiliti
 	$(AM_LINK)
 
 cassandra_serialize_test: utilities/cassandra/cassandra_serialize_test.o $(LIBOBJECTS) $(TESTHARNESS)
-	$(AM_LINK)
-
-redis_test: utilities/redis/redis_lists_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
 hash_table_test: utilities/persistent_cache/hash_table_test.o $(LIBOBJECTS) $(TESTHARNESS)
@@ -1247,16 +1284,7 @@ backupable_db_test: utilities/backupable/backupable_db_test.o $(LIBOBJECTS) $(TE
 checkpoint_test: utilities/checkpoint/checkpoint_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
-document_db_test: utilities/document/document_db_test.o $(LIBOBJECTS) $(TESTHARNESS)
-	$(AM_LINK)
-
-json_document_test: utilities/document/json_document_test.o $(LIBOBJECTS) $(TESTHARNESS)
-	$(AM_LINK)
-
 sim_cache_test: utilities/simulator_cache/sim_cache_test.o db/db_test_util.o $(LIBOBJECTS) $(TESTHARNESS)
-	$(AM_LINK)
-
-spatial_db_test: utilities/spatialdb/spatial_db_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
 env_mirror_test: utilities/env_mirror_test.o $(LIBOBJECTS) $(TESTHARNESS)
@@ -1274,9 +1302,6 @@ object_registry_test: utilities/object_registry_test.o $(LIBOBJECTS) $(TESTHARNE
 	$(AM_LINK)
 
 ttl_test: utilities/ttl/ttl_test.o $(LIBOBJECTS) $(TESTHARNESS)
-	$(AM_LINK)
-
-date_tiered_test: utilities/date_tiered/date_tiered_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
 write_batch_with_index_test: utilities/write_batch_with_index/write_batch_with_index_test.o $(LIBOBJECTS) $(TESTHARNESS)
@@ -1345,6 +1370,9 @@ table_test: table/table_test.o $(LIBOBJECTS) $(TESTHARNESS)
 block_test: table/block_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
+data_block_hash_index_test: table/data_block_hash_index_test.o $(LIBOBJECTS) $(TESTHARNESS)
+	$(AM_LINK)
+
 inlineskiplist_test: memtable/inlineskiplist_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
@@ -1402,9 +1430,6 @@ deletefile_test: db/deletefile_test.o $(LIBOBJECTS) $(TESTHARNESS)
 obsolete_files_test: db/obsolete_files_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
-geodb_test: utilities/geodb/geodb_test.o $(LIBOBJECTS) $(TESTHARNESS)
-	$(AM_LINK)
-
 rocksdb_dump: tools/dump/rocksdb_dump.o $(LIBOBJECTS)
 	$(AM_LINK)
 
@@ -1441,6 +1466,9 @@ options_util_test: utilities/options/options_util_test.o $(LIBOBJECTS) $(TESTHAR
 db_bench_tool_test: tools/db_bench_tool_test.o $(BENCHTOOLOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
+trace_analyzer_test: tools/trace_analyzer_test.o $(LIBOBJECTS) $(ANALYZETOOLOBJECTS) $(TESTHARNESS)
+	$(AM_LINK)
+
 event_logger_test: util/event_logger_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
@@ -1448,9 +1476,6 @@ timer_queue_test: util/timer_queue_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
 sst_dump_test: tools/sst_dump_test.o $(LIBOBJECTS) $(TESTHARNESS)
-	$(AM_LINK)
-
-column_aware_encoding_test: utilities/column_aware_encoding_test.o $(TESTHARNESS) $(EXPOBJECTS)
 	$(AM_LINK)
 
 optimistic_transaction_test: utilities/transactions/optimistic_transaction_test.o $(LIBOBJECTS) $(TESTHARNESS)
@@ -1492,9 +1517,6 @@ sst_dump: tools/sst_dump.o $(LIBOBJECTS)
 blob_dump: tools/blob_dump.o $(LIBOBJECTS)
 	$(AM_LINK)
 
-column_aware_encoding_exp: utilities/column_aware_encoding_exp.o $(EXPOBJECTS)
-	$(AM_LINK)
-
 repair_test: db/repair_test.o db/db_test_util.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
@@ -1522,7 +1544,19 @@ lua_test: utilities/lua/rocks_lua_test.o db/db_test_util.o $(LIBOBJECTS) $(TESTH
 range_del_aggregator_test: db/range_del_aggregator_test.o db/db_test_util.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
+range_del_aggregator_bench: db/range_del_aggregator_bench.o $(LIBOBJECTS) $(TESTUTIL)
+	$(AM_LINK)
+
 blob_db_test: utilities/blob_db/blob_db_test.o $(LIBOBJECTS) $(TESTHARNESS)
+	$(AM_LINK)
+
+repeatable_thread_test: util/repeatable_thread_test.o $(LIBOBJECTS) $(TESTHARNESS)
+	$(AM_LINK)
+
+range_tombstone_fragmenter_test: db/range_tombstone_fragmenter_test.o db/db_test_util.o $(LIBOBJECTS) $(TESTHARNESS)
+	$(AM_LINK)
+
+sst_file_reader_test: table/sst_file_reader_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
 #-------------------------------------------------
@@ -1596,14 +1630,14 @@ ZLIB_DOWNLOAD_BASE ?= http://zlib.net
 BZIP2_VER ?= 1.0.6
 BZIP2_SHA256 ?= a2848f34fcd5d6cf47def00461fcb528a0484d8edef8208d6d2e2909dc61d9cd
 BZIP2_DOWNLOAD_BASE ?= https://web.archive.org/web/20180624184835/http://www.bzip.org
-SNAPPY_VER ?= 1.1.4
-SNAPPY_SHA256 ?= 134bfe122fd25599bb807bb8130e7ba6d9bdb851e0b16efcb83ac4f5d0b70057
-SNAPPY_DOWNLOAD_BASE ?= https://github.com/google/snappy/releases/download
-LZ4_VER ?= 1.8.0
-LZ4_SHA256 ?= 2ca482ea7a9bb103603108b5a7510b7592b90158c151ff50a28f1ca8389fccf6
+SNAPPY_VER ?= 1.1.7
+SNAPPY_SHA256 ?= 3dfa02e873ff51a11ee02b9ca391807f0c8ea0529a4924afa645fbf97163f9d4
+SNAPPY_DOWNLOAD_BASE ?= https://github.com/google/snappy/archive
+LZ4_VER ?= 1.8.3
+LZ4_SHA256 ?= 33af5936ac06536805f9745e0b6d61da606a1f8b4cc5c04dd3cbaca3b9b4fc43
 LZ4_DOWNLOAD_BASE ?= https://github.com/lz4/lz4/archive
-ZSTD_VER ?= 1.3.3
-ZSTD_SHA256 ?= a77c47153ee7de02626c5b2a097005786b71688be61e9fb81806a011f90b297b
+ZSTD_VER ?= 1.3.7
+ZSTD_SHA256 ?= 5dd1e90eb16c25425880c8a91327f63de22891ffed082fcc17e5ae84fce0d5fb
 ZSTD_DOWNLOAD_BASE ?= https://github.com/facebook/zstd/archive
 CURL_SSL_OPTS ?= --tlsv1
 
@@ -1642,7 +1676,9 @@ endif
 
 libz.a:
 	-rm -rf zlib-$(ZLIB_VER)
-	curl -O -L ${ZLIB_DOWNLOAD_BASE}/zlib-$(ZLIB_VER).tar.gz
+ifeq (,$(wildcard ./zlib-$(ZLIB_VER).tar.gz))
+	curl --output zlib-$(ZLIB_VER).tar.gz -L ${ZLIB_DOWNLOAD_BASE}/zlib-$(ZLIB_VER).tar.gz
+endif
 	ZLIB_SHA256_ACTUAL=`$(SHA256_CMD) zlib-$(ZLIB_VER).tar.gz | cut -d ' ' -f 1`; \
 	if [ "$(ZLIB_SHA256)" != "$$ZLIB_SHA256_ACTUAL" ]; then \
 		echo zlib-$(ZLIB_VER).tar.gz checksum mismatch, expected=\"$(ZLIB_SHA256)\" actual=\"$$ZLIB_SHA256_ACTUAL\"; \
@@ -1654,7 +1690,9 @@ libz.a:
 
 libbz2.a:
 	-rm -rf bzip2-$(BZIP2_VER)
-	curl -O -L ${BZIP2_DOWNLOAD_BASE}/$(BZIP2_VER)/bzip2-$(BZIP2_VER).tar.gz
+ifeq (,$(wildcard ./bzip2-$(BZIP2_VER).tar.gz))
+	curl --output bzip2-$(BZIP2_VER).tar.gz -L ${BZIP2_DOWNLOAD_BASE}/$(BZIP2_VER)/bzip2-$(BZIP2_VER).tar.gz
+endif
 	BZIP2_SHA256_ACTUAL=`$(SHA256_CMD) bzip2-$(BZIP2_VER).tar.gz | cut -d ' ' -f 1`; \
 	if [ "$(BZIP2_SHA256)" != "$$BZIP2_SHA256_ACTUAL" ]; then \
 		echo bzip2-$(BZIP2_VER).tar.gz checksum mismatch, expected=\"$(BZIP2_SHA256)\" actual=\"$$BZIP2_SHA256_ACTUAL\"; \
@@ -1666,21 +1704,24 @@ libbz2.a:
 
 libsnappy.a:
 	-rm -rf snappy-$(SNAPPY_VER)
-	curl -O -L ${CURL_SSL_OPTS} ${SNAPPY_DOWNLOAD_BASE}/$(SNAPPY_VER)/snappy-$(SNAPPY_VER).tar.gz
+ifeq (,$(wildcard ./snappy-$(SNAPPY_VER).tar.gz))
+	curl --output snappy-$(SNAPPY_VER).tar.gz -L ${CURL_SSL_OPTS} ${SNAPPY_DOWNLOAD_BASE}/$(SNAPPY_VER).tar.gz
+endif
 	SNAPPY_SHA256_ACTUAL=`$(SHA256_CMD) snappy-$(SNAPPY_VER).tar.gz | cut -d ' ' -f 1`; \
 	if [ "$(SNAPPY_SHA256)" != "$$SNAPPY_SHA256_ACTUAL" ]; then \
 		echo snappy-$(SNAPPY_VER).tar.gz checksum mismatch, expected=\"$(SNAPPY_SHA256)\" actual=\"$$SNAPPY_SHA256_ACTUAL\"; \
 		exit 1; \
 	fi
 	tar xvzf snappy-$(SNAPPY_VER).tar.gz
-	cd snappy-$(SNAPPY_VER) && CFLAGS='${EXTRA_CFLAGS}' CXXFLAGS='${EXTRA_CXXFLAGS}' LDFLAGS='${EXTRA_LDFLAGS}' ./configure --with-pic --enable-static --disable-shared
-	cd snappy-$(SNAPPY_VER) && $(MAKE) ${SNAPPY_MAKE_TARGET}
-	cp snappy-$(SNAPPY_VER)/.libs/libsnappy.a .
+	mkdir snappy-$(SNAPPY_VER)/build
+	cd snappy-$(SNAPPY_VER)/build && CFLAGS='${EXTRA_CFLAGS}' CXXFLAGS='${EXTRA_CXXFLAGS}' LDFLAGS='${EXTRA_LDFLAGS}' cmake .. && $(MAKE) ${SNAPPY_MAKE_TARGET}
+	cp snappy-$(SNAPPY_VER)/build/libsnappy.a .
 
 liblz4.a:
 	-rm -rf lz4-$(LZ4_VER)
-	curl -O -L ${CURL_SSL_OPTS} ${LZ4_DOWNLOAD_BASE}/v$(LZ4_VER).tar.gz
-	mv v$(LZ4_VER).tar.gz lz4-$(LZ4_VER).tar.gz
+ifeq (,$(wildcard ./lz4-$(LZ4_VER).tar.gz))
+	curl --output lz4-$(LZ4_VER).tar.gz -L ${CURL_SSL_OPTS} ${LZ4_DOWNLOAD_BASE}/v$(LZ4_VER).tar.gz
+endif
 	LZ4_SHA256_ACTUAL=`$(SHA256_CMD) lz4-$(LZ4_VER).tar.gz | cut -d ' ' -f 1`; \
 	if [ "$(LZ4_SHA256)" != "$$LZ4_SHA256_ACTUAL" ]; then \
 		echo lz4-$(LZ4_VER).tar.gz checksum mismatch, expected=\"$(LZ4_SHA256)\" actual=\"$$LZ4_SHA256_ACTUAL\"; \
@@ -1692,8 +1733,9 @@ liblz4.a:
 
 libzstd.a:
 	-rm -rf zstd-$(ZSTD_VER)
-	curl -O -L ${CURL_SSL_OPTS} ${ZSTD_DOWNLOAD_BASE}/v$(ZSTD_VER).tar.gz
-	mv v$(ZSTD_VER).tar.gz zstd-$(ZSTD_VER).tar.gz
+ifeq (,$(wildcard ./zstd-$(ZSTD_VER).tar.gz))
+	curl --output zstd-$(ZSTD_VER).tar.gz -L ${CURL_SSL_OPTS} ${ZSTD_DOWNLOAD_BASE}/v$(ZSTD_VER).tar.gz
+endif
 	ZSTD_SHA256_ACTUAL=`$(SHA256_CMD) zstd-$(ZSTD_VER).tar.gz | cut -d ' ' -f 1`; \
 	if [ "$(ZSTD_SHA256)" != "$$ZSTD_SHA256_ACTUAL" ]; then \
 		echo zstd-$(ZSTD_VER).tar.gz checksum mismatch, expected=\"$(ZSTD_SHA256)\" actual=\"$$ZSTD_SHA256_ACTUAL\"; \
@@ -1755,20 +1797,26 @@ rocksdbjavastaticrelease: rocksdbjavastatic
 	cd java/target;jar -uf $(ROCKSDB_JAR_ALL) librocksdbjni-*.so librocksdbjni-*.jnilib
 	cd java/target/classes;jar -uf ../$(ROCKSDB_JAR_ALL) org/rocksdb/*.class org/rocksdb/util/*.class
 
-rocksdbjavastaticreleasedocker: rocksdbjavastatic
-	DOCKER_LINUX_X64_CONTAINER=`docker ps -aqf name=rocksdb_linux_x64-be`; \
-	if [ -z "$$DOCKER_LINUX_X64_CONTAINER" ]; then \
-		docker container create --attach stdin --attach stdout --attach stderr --volume `pwd`:/rocksdb-host --name rocksdb_linux_x64-be evolvedbinary/rocksjava:centos6_x64-be /rocksdb-host/java/crossbuild/docker-build-linux-centos.sh; \
-	fi
-	docker start -a rocksdb_linux_x64-be
+rocksdbjavastaticreleasedocker: rocksdbjavastatic rocksdbjavastaticdockerx86 rocksdbjavastaticdockerx86_64
+	cd java;jar -cf target/$(ROCKSDB_JAR_ALL) HISTORY*.md
+	cd java/target;jar -uf $(ROCKSDB_JAR_ALL) librocksdbjni-*.so librocksdbjni-*.jnilib
+	cd java/target/classes;jar -uf ../$(ROCKSDB_JAR_ALL) org/rocksdb/*.class org/rocksdb/util/*.class
+
+rocksdbjavastaticdockerx86:
+	mkdir -p java/target
 	DOCKER_LINUX_X86_CONTAINER=`docker ps -aqf name=rocksdb_linux_x86-be`; \
 	if [ -z "$$DOCKER_LINUX_X86_CONTAINER" ]; then \
 		docker container create --attach stdin --attach stdout --attach stderr --volume `pwd`:/rocksdb-host --name rocksdb_linux_x86-be evolvedbinary/rocksjava:centos6_x86-be /rocksdb-host/java/crossbuild/docker-build-linux-centos.sh; \
 	fi
 	docker start -a rocksdb_linux_x86-be
-	cd java;jar -cf target/$(ROCKSDB_JAR_ALL) HISTORY*.md
-	cd java/target;jar -uf $(ROCKSDB_JAR_ALL) librocksdbjni-*.so librocksdbjni-*.jnilib
-	cd java/target/classes;jar -uf ../$(ROCKSDB_JAR_ALL) org/rocksdb/*.class org/rocksdb/util/*.class
+
+rocksdbjavastaticdockerx86_64:
+	mkdir -p java/target
+	DOCKER_LINUX_X64_CONTAINER=`docker ps -aqf name=rocksdb_linux_x64-be`; \
+	if [ -z "$$DOCKER_LINUX_X64_CONTAINER" ]; then \
+		docker container create --attach stdin --attach stdout --attach stderr --volume `pwd`:/rocksdb-host --name rocksdb_linux_x64-be evolvedbinary/rocksjava:centos6_x64-be /rocksdb-host/java/crossbuild/docker-build-linux-centos.sh; \
+	fi
+	docker start -a rocksdb_linux_x64-be
 
 rocksdbjavastaticdockerppc64le:
 	mkdir -p java/target
@@ -1856,7 +1904,8 @@ commit_prereq: build_tools/rocksdb-lego-determinator \
 ifeq ($(PLATFORM), IOS)
 # For iOS, create universal object files to be used on both the simulator and
 # a device.
-PLATFORMSROOT=/Applications/Xcode.app/Contents/Developer/Platforms
+XCODEROOT=$(shell xcode-select -print-path)
+PLATFORMSROOT=$(XCODEROOT)/Platforms
 SIMULATORROOT=$(PLATFORMSROOT)/iPhoneSimulator.platform/Developer
 DEVICEROOT=$(PLATFORMSROOT)/iPhoneOS.platform/Developer
 IOSVERSION=$(shell defaults read $(PLATFORMSROOT)/iPhoneOS.platform/version CFBundleShortVersionString)
@@ -1893,7 +1942,7 @@ endif
 #  	Source files dependencies detection
 # ---------------------------------------------------------------------------
 
-all_sources = $(LIB_SOURCES) $(MAIN_SOURCES) $(MOCK_LIB_SOURCES) $(TOOL_LIB_SOURCES) $(BENCH_LIB_SOURCES) $(TEST_LIB_SOURCES) $(EXP_LIB_SOURCES)
+all_sources = $(LIB_SOURCES) $(MAIN_SOURCES) $(MOCK_LIB_SOURCES) $(TOOL_LIB_SOURCES) $(BENCH_LIB_SOURCES) $(TEST_LIB_SOURCES) $(ANALYZER_LIB_SOURCES)
 DEPFILES = $(all_sources:.cc=.cc.d)
 
 # Add proper dependency support so changing a .h file forces a .cc file to

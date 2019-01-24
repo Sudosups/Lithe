@@ -39,11 +39,12 @@
 #include "table/full_filter_block.h"
 #include "table/table_builder.h"
 
-#include "util/string_util.h"
 #include "util/coding.h"
 #include "util/compression.h"
 #include "util/crc32c.h"
+#include "util/memory_allocator.h"
 #include "util/stop_watch.h"
+#include "util/string_util.h"
 #include "util/xxhash.h"
 
 #include "table/index_builder.h"
@@ -63,6 +64,7 @@ namespace {
 FilterBlockBuilder* CreateFilterBlockBuilder(
     const ImmutableCFOptions& /*opt*/, const MutableCFOptions& mopt,
     const BlockBasedTableOptions& table_opt,
+    const bool use_delta_encoding_for_index_values,
     PartitionedIndexBuilder* const p_index_builder) {
   if (table_opt.filter_policy == nullptr) return nullptr;
 
@@ -85,7 +87,7 @@ FilterBlockBuilder* CreateFilterBlockBuilder(
       return new PartitionedFilterBlockBuilder(
           mopt.prefix_extractor.get(), table_opt.whole_key_filtering,
           filter_bits_builder, table_opt.index_block_restart_interval,
-          p_index_builder, partition_size);
+          use_delta_encoding_for_index_values, p_index_builder, partition_size);
     } else {
       return new FullFilterBlockBuilder(mopt.prefix_extractor.get(),
                                         table_opt.whole_key_filtering,
@@ -102,19 +104,19 @@ bool GoodCompressionRatio(size_t compressed_size, size_t raw_size) {
 }  // namespace
 
 // format_version is the block format as defined in include/rocksdb/table.h
-Slice CompressBlock(const Slice& raw, const CompressionContext& compression_ctx,
+Slice CompressBlock(const Slice& raw, const CompressionInfo& compression_info,
                     CompressionType* type, uint32_t format_version,
                     std::string* compressed_output) {
-  *type = compression_ctx.type();
-  if (compression_ctx.type() == kNoCompression) {
+  *type = compression_info.type();
+  if (compression_info.type() == kNoCompression) {
     return raw;
   }
 
   // Will return compressed block contents if (1) the compression method is
   // supported in this platform and (2) the compression rate is "good enough".
-  switch (compression_ctx.type()) {
+  switch (compression_info.type()) {
     case kSnappyCompression:
-      if (Snappy_Compress(compression_ctx, raw.data(), raw.size(),
+      if (Snappy_Compress(compression_info, raw.data(), raw.size(),
                           compressed_output) &&
           GoodCompressionRatio(compressed_output->size(), raw.size())) {
         return *compressed_output;
@@ -122,7 +124,7 @@ Slice CompressBlock(const Slice& raw, const CompressionContext& compression_ctx,
       break;  // fall back to no compression.
     case kZlibCompression:
       if (Zlib_Compress(
-              compression_ctx,
+              compression_info,
               GetCompressFormatForVersion(kZlibCompression, format_version),
               raw.data(), raw.size(), compressed_output) &&
           GoodCompressionRatio(compressed_output->size(), raw.size())) {
@@ -131,7 +133,7 @@ Slice CompressBlock(const Slice& raw, const CompressionContext& compression_ctx,
       break;  // fall back to no compression.
     case kBZip2Compression:
       if (BZip2_Compress(
-              compression_ctx,
+              compression_info,
               GetCompressFormatForVersion(kBZip2Compression, format_version),
               raw.data(), raw.size(), compressed_output) &&
           GoodCompressionRatio(compressed_output->size(), raw.size())) {
@@ -140,7 +142,7 @@ Slice CompressBlock(const Slice& raw, const CompressionContext& compression_ctx,
       break;  // fall back to no compression.
     case kLZ4Compression:
       if (LZ4_Compress(
-              compression_ctx,
+              compression_info,
               GetCompressFormatForVersion(kLZ4Compression, format_version),
               raw.data(), raw.size(), compressed_output) &&
           GoodCompressionRatio(compressed_output->size(), raw.size())) {
@@ -149,7 +151,7 @@ Slice CompressBlock(const Slice& raw, const CompressionContext& compression_ctx,
       break;  // fall back to no compression.
     case kLZ4HCCompression:
       if (LZ4HC_Compress(
-              compression_ctx,
+              compression_info,
               GetCompressFormatForVersion(kLZ4HCCompression, format_version),
               raw.data(), raw.size(), compressed_output) &&
           GoodCompressionRatio(compressed_output->size(), raw.size())) {
@@ -165,7 +167,7 @@ Slice CompressBlock(const Slice& raw, const CompressionContext& compression_ctx,
       break;
     case kZSTD:
     case kZSTDNotFinalCompression:
-      if (ZSTD_Compress(compression_ctx, raw.data(), raw.size(),
+      if (ZSTD_Compress(compression_info, raw.data(), raw.size(),
                         compressed_output) &&
           GoodCompressionRatio(compressed_output->size(), raw.size())) {
         return *compressed_output;
@@ -259,13 +261,16 @@ struct BlockBasedTableBuilder::Rep {
   PartitionedIndexBuilder* p_index_builder_ = nullptr;
 
   std::string last_key;
-  // Compression dictionary or nullptr
-  const std::string* compression_dict;
+  CompressionType compression_type;
+  CompressionOptions compression_opts;
+  CompressionDict compression_dict;
   CompressionContext compression_ctx;
   std::unique_ptr<UncompressionContext> verify_ctx;
+  UncompressionDict verify_dict;
   TableProperties props;
 
   bool closed = false;  // Either Finish() or Abandon() has been called.
+  const bool use_delta_encoding_for_index_values;
   std::unique_ptr<FilterBlockBuilder> filter_builder;
   char compressed_cache_key_prefix[BlockBasedTable::kMaxCacheKeyPrefixSize];
   size_t compressed_cache_key_prefix_size;
@@ -301,11 +306,27 @@ struct BlockBasedTableBuilder::Rep {
                       ? std::min(table_options.block_size, kDefaultPageSize)
                       : 0),
         data_block(table_options.block_restart_interval,
-                   table_options.use_delta_encoding),
+                   table_options.use_delta_encoding,
+                   false /* use_value_delta_encoding */,
+                   icomparator.user_comparator()
+                           ->CanKeysWithDifferentByteContentsBeEqual()
+                       ? BlockBasedTableOptions::kDataBlockBinarySearch
+                       : table_options.data_block_index_type,
+                   table_options.data_block_hash_table_util_ratio),
         range_del_block(1 /* block_restart_interval */),
         internal_prefix_transform(_moptions.prefix_extractor.get()),
-        compression_dict(_compression_dict),
-        compression_ctx(_compression_type, _compression_opts),
+        compression_type(_compression_type),
+        compression_opts(_compression_opts),
+        compression_dict(
+            _compression_dict == nullptr ? Slice() : Slice(*_compression_dict),
+            _compression_type, _compression_opts.level),
+        compression_ctx(_compression_type),
+        verify_dict(
+            _compression_dict == nullptr ? std::string() : *_compression_dict,
+            _compression_type == kZSTD ||
+                _compression_type == kZSTDNotFinalCompression),
+        use_delta_encoding_for_index_values(table_opt.format_version >= 4 &&
+                                            !table_opt.block_align),
         compressed_cache_key_prefix_size(0),
         flush_block_policy(
             table_options.flush_block_policy_factory->NewFlushBlockPolicy(
@@ -317,18 +338,21 @@ struct BlockBasedTableBuilder::Rep {
     if (table_options.index_type ==
         BlockBasedTableOptions::kTwoLevelIndexSearch) {
       p_index_builder_ = PartitionedIndexBuilder::CreateIndexBuilder(
-          &internal_comparator, table_options);
+          &internal_comparator, use_delta_encoding_for_index_values,
+          table_options);
       index_builder.reset(p_index_builder_);
     } else {
       index_builder.reset(IndexBuilder::CreateIndexBuilder(
           table_options.index_type, &internal_comparator,
-          &this->internal_prefix_transform, table_options));
+          &this->internal_prefix_transform, use_delta_encoding_for_index_values,
+          table_options));
     }
     if (skip_filters) {
       filter_builder = nullptr;
     } else {
       filter_builder.reset(CreateFilterBlockBuilder(
-          _ioptions, _moptions, table_options, p_index_builder_));
+          _ioptions, _moptions, table_options,
+          use_delta_encoding_for_index_values, p_index_builder_));
     }
 
     for (auto& collector_factories : *int_tbl_prop_collector_factories) {
@@ -341,7 +365,7 @@ struct BlockBasedTableBuilder::Rep {
             _moptions.prefix_extractor != nullptr));
     if (table_options.verify_compression) {
       verify_ctx.reset(new UncompressionContext(UncompressionContext::NoCache(),
-                                                compression_ctx.type()));
+                                                compression_type));
     }
   }
 
@@ -403,9 +427,11 @@ void BlockBasedTableBuilder::Add(const Slice& key, const Slice& value) {
   if (!ok()) return;
   ValueType value_type = ExtractValueType(key);
   if (IsValueType(value_type)) {
-    if (r->props.num_entries > 0) {
+#ifndef NDEBUG
+    if (r->props.num_entries > r->props.num_range_deletions) {
       assert(r->internal_comparator.Compare(key, Slice(r->last_key)) > 0);
     }
+#endif  // NDEBUG
 
     auto should_flush = r->flush_block_policy->Update(key, value);
     if (should_flush) {
@@ -433,10 +459,6 @@ void BlockBasedTableBuilder::Add(const Slice& key, const Slice& value) {
 
     r->last_key.assign(key.data(), key.size());
     r->data_block.Add(key, value);
-    r->props.num_entries++;
-    r->props.raw_key_size += key.size();
-    r->props.raw_value_size += value.size();
-
     r->index_builder->OnKeyAdded(key);
     NotifyCollectTableCollectorsOnAdd(key, value, r->offset,
                                       r->table_properties_collectors,
@@ -444,14 +466,23 @@ void BlockBasedTableBuilder::Add(const Slice& key, const Slice& value) {
 
   } else if (value_type == kTypeRangeDeletion) {
     r->range_del_block.Add(key, value);
-    ++r->props.num_range_deletions;
-    r->props.raw_key_size += key.size();
-    r->props.raw_value_size += value.size();
     NotifyCollectTableCollectorsOnAdd(key, value, r->offset,
                                       r->table_properties_collectors,
                                       r->ioptions.info_log);
   } else {
     assert(false);
+  }
+
+  r->props.num_entries++;
+  r->props.raw_key_size += key.size();
+  r->props.raw_value_size += value.size();
+  if (value_type == kTypeDeletion || value_type == kTypeSingleDeletion) {
+    r->props.num_deletions++;
+  } else if (value_type == kTypeRangeDeletion) {
+    r->props.num_deletions++;
+    r->props.num_range_deletions++;
+  } else if (value_type == kTypeMerge) {
+    r->props.num_merge_operands++;
   }
 }
 
@@ -485,7 +516,7 @@ void BlockBasedTableBuilder::WriteBlock(const Slice& raw_block_contents,
   assert(ok());
   Rep* r = rep_;
 
-  auto type = r->compression_ctx.type();
+  auto type = r->compression_type;
   Slice block_contents;
   bool abort_compression = false;
 
@@ -493,24 +524,12 @@ void BlockBasedTableBuilder::WriteBlock(const Slice& raw_block_contents,
     ShouldReportDetailedTime(r->ioptions.env, r->ioptions.statistics));
 
   if (raw_block_contents.size() < kCompressionSizeLimit) {
-    Slice compression_dict;
-    if (is_data_block && r->compression_dict && r->compression_dict->size()) {
-      r->compression_ctx.dict() = *r->compression_dict;
-      if (r->table_options.verify_compression) {
-        assert(r->verify_ctx != nullptr);
-        r->verify_ctx->dict() = *r->compression_dict;
-      }
-    } else {
-      // Clear dictionary
-      r->compression_ctx.dict() = Slice();
-      if (r->table_options.verify_compression) {
-        assert(r->verify_ctx != nullptr);
-        r->verify_ctx->dict() = Slice();
-      }
-    }
-
+    CompressionInfo compression_info(
+        r->compression_opts, r->compression_ctx,
+        is_data_block ? r->compression_dict : CompressionDict::GetEmptyDict(),
+        r->compression_type);
     block_contents =
-        CompressBlock(raw_block_contents, r->compression_ctx, &type,
+        CompressBlock(raw_block_contents, compression_info, &type,
                       r->table_options.format_version, &r->compressed_output);
 
     // Some of the compression algorithms are known to be unreliable. If
@@ -519,8 +538,12 @@ void BlockBasedTableBuilder::WriteBlock(const Slice& raw_block_contents,
     if (type != kNoCompression && r->table_options.verify_compression) {
       // Retrieve the uncompressed contents into a new buffer
       BlockContents contents;
+      UncompressionInfo uncompression_info(
+          *r->verify_ctx,
+          is_data_block ? r->verify_dict : UncompressionDict::GetEmptyDict(),
+          r->compression_type);
       Status stat = UncompressBlockContentsForCompressionType(
-          *r->verify_ctx, block_contents.data(), block_contents.size(),
+          uncompression_info, block_contents.data(), block_contents.size(),
           &contents, r->table_options.format_version, r->ioptions);
 
       if (stat.ok()) {
@@ -596,6 +619,18 @@ void BlockBasedTableBuilder::WriteRawBlock(const Slice& block_contents,
         EncodeFixed32(trailer_without_type, XXH32_digest(xxh));
         break;
       }
+      case kxxHash64: {
+        XXH64_state_t* const state = XXH64_createState();
+        XXH64_reset(state, 0);
+        XXH64_update(state, block_contents.data(),
+                static_cast<uint32_t>(block_contents.size()));
+        XXH64_update(state, trailer, 1);  // Extend  to cover block type
+        EncodeFixed32(trailer_without_type,
+          static_cast<uint32_t>(XXH64_digest(state) & // lower 32 bits
+                                   uint64_t{0xffffffff}));
+        XXH64_freeState(state);
+        break;
+      }
     }
 
     assert(r->status.ok());
@@ -623,9 +658,9 @@ Status BlockBasedTableBuilder::status() const {
   return rep_->status;
 }
 
-static void DeleteCachedBlock(const Slice& /*key*/, void* value) {
-  Block* block = reinterpret_cast<Block*>(value);
-  delete block;
+static void DeleteCachedBlockContents(const Slice& /*key*/, void* value) {
+  BlockContents* bc = reinterpret_cast<BlockContents*>(value);
+  delete bc;
 }
 
 //
@@ -641,13 +676,16 @@ Status BlockBasedTableBuilder::InsertBlockInCache(const Slice& block_contents,
 
     size_t size = block_contents.size();
 
-    std::unique_ptr<char[]> ubuf(new char[size + 1]);
+    auto ubuf =
+        AllocateBlock(size + 1, block_cache_compressed->memory_allocator());
     memcpy(ubuf.get(), block_contents.data(), size);
     ubuf[size] = type;
 
-    BlockContents results(std::move(ubuf), size, true, type);
-
-    Block* block = new Block(std::move(results), kDisableGlobalSequenceNumber);
+    BlockContents* block_contents_to_cache =
+        new BlockContents(std::move(ubuf), size);
+#ifndef NDEBUG
+    block_contents_to_cache->is_raw_block = true;
+#endif  // NDEBUG
 
     // make cache key by appending the file offset to the cache prefix id
     char* end = EncodeVarint64(
@@ -658,8 +696,10 @@ Status BlockBasedTableBuilder::InsertBlockInCache(const Slice& block_contents,
               (end - r->compressed_cache_key_prefix));
 
     // Insert into compressed block cache.
-    block_cache_compressed->Insert(key, block, block->ApproximateMemoryUsage(),
-                                   &DeleteCachedBlock);
+    block_cache_compressed->Insert(
+        key, block_contents_to_cache,
+        block_contents_to_cache->ApproximateMemoryUsage(),
+        &DeleteCachedBlockContents);
 
     // Invalidate OS cache.
     r->file->InvalidateCache(static_cast<size_t>(r->offset), size);
@@ -675,7 +715,8 @@ void BlockBasedTableBuilder::WriteFilterBlock(
   if (ok() && !empty_filter_block) {
     Status s = Status::Incomplete();
     while (ok() && s.IsIncomplete()) {
-      Slice filter_content = rep_->filter_builder->Finish(filter_block_handle, &s);
+      Slice filter_content =
+          rep_->filter_builder->Finish(filter_block_handle, &s);
       assert(s.ok() || s.IsIncomplete());
       rep_->props.filter_size += filter_content.size();
       WriteRawBlock(filter_content, kNoCompression, &filter_block_handle);
@@ -752,22 +793,25 @@ void BlockBasedTableBuilder::WritePropertiesBlock(
     PropertyBlockBuilder property_block_builder;
     rep_->props.column_family_id = rep_->column_family_id;
     rep_->props.column_family_name = rep_->column_family_name;
-    rep_->props.filter_policy_name = rep_->table_options.filter_policy != nullptr
-                                      ? rep_->table_options.filter_policy->Name()
-                                      : "";
+    rep_->props.filter_policy_name =
+        rep_->table_options.filter_policy != nullptr
+            ? rep_->table_options.filter_policy->Name()
+            : "";
     rep_->props.index_size =
         rep_->index_builder->IndexSize() + kBlockTrailerSize;
     rep_->props.comparator_name = rep_->ioptions.user_comparator != nullptr
-                                   ? rep_->ioptions.user_comparator->Name()
-                                   : "nullptr";
-    rep_->props.merge_operator_name = rep_->ioptions.merge_operator != nullptr
-                                       ? rep_->ioptions.merge_operator->Name()
-                                       : "nullptr";
+                                      ? rep_->ioptions.user_comparator->Name()
+                                      : "nullptr";
+    rep_->props.merge_operator_name =
+        rep_->ioptions.merge_operator != nullptr
+            ? rep_->ioptions.merge_operator->Name()
+            : "nullptr";
     rep_->props.compression_name =
-        CompressionTypeToString(rep_->compression_ctx.type());
-    rep_->props.prefix_extractor_name = rep_->moptions.prefix_extractor != nullptr
-                                         ? rep_->moptions.prefix_extractor->Name()
-                                         : "nullptr";
+        CompressionTypeToString(rep_->compression_type);
+    rep_->props.prefix_extractor_name =
+        rep_->moptions.prefix_extractor != nullptr
+            ? rep_->moptions.prefix_extractor->Name()
+            : "nullptr";
 
     std::string property_collectors_names = "[";
     for (size_t i = 0;
@@ -789,6 +833,8 @@ void BlockBasedTableBuilder::WritePropertiesBlock(
     }
     rep_->props.index_key_is_user_key =
         !rep_->index_builder->seperator_is_key_plus_seq();
+    rep_->props.index_value_is_delta_encoded =
+        rep_->use_delta_encoding_for_index_values;
     rep_->props.creation_time = rep_->creation_time;
     rep_->props.oldest_key_time = rep_->oldest_key_time;
 
@@ -810,10 +856,10 @@ void BlockBasedTableBuilder::WritePropertiesBlock(
 
 void BlockBasedTableBuilder::WriteCompressionDictBlock(
     MetaIndexBuilder* meta_index_builder) {
-  if (rep_->compression_dict && rep_->compression_dict->size()) {
+  if (rep_->compression_dict.GetRawDict().size()) {
     BlockHandle compression_dict_block_handle;
     if (ok()) {
-      WriteRawBlock(*rep_->compression_dict, kNoCompression,
+      WriteRawBlock(rep_->compression_dict.GetRawDict(), kNoCompression,
                     &compression_dict_block_handle);
     }
     if (ok()) {
@@ -833,6 +879,35 @@ void BlockBasedTableBuilder::WriteRangeDelBlock(
   }
 }
 
+void BlockBasedTableBuilder::WriteFooter(BlockHandle& metaindex_block_handle,
+                                         BlockHandle& index_block_handle) {
+  Rep* r = rep_;
+  // No need to write out new footer if we're using default checksum.
+  // We're writing legacy magic number because we want old versions of RocksDB
+  // be able to read files generated with new release (just in case if
+  // somebody wants to roll back after an upgrade)
+  // TODO(icanadi) at some point in the future, when we're absolutely sure
+  // nobody will roll back to RocksDB 2.x versions, retire the legacy magic
+  // number and always write new table files with new magic number
+  bool legacy = (r->table_options.format_version == 0);
+  // this is guaranteed by BlockBasedTableBuilder's constructor
+  assert(r->table_options.checksum == kCRC32c ||
+         r->table_options.format_version != 0);
+  Footer footer(
+      legacy ? kLegacyBlockBasedTableMagicNumber : kBlockBasedTableMagicNumber,
+      r->table_options.format_version);
+  footer.set_metaindex_handle(metaindex_block_handle);
+  footer.set_index_handle(index_block_handle);
+  footer.set_checksum(r->table_options.checksum);
+  std::string footer_encoding;
+  footer.EncodeTo(&footer_encoding);
+  assert(r->status.ok());
+  r->status = r->file->Append(footer_encoding);
+  if (r->status.ok()) {
+    r->offset += footer_encoding.size();
+  }
+}
+
 Status BlockBasedTableBuilder::Finish() {
   Rep* r = rep_;
   bool empty_data_block = r->data_block.empty();
@@ -847,13 +922,14 @@ Status BlockBasedTableBuilder::Finish() {
         &r->last_key, nullptr /* no next data block */, r->pending_handle);
   }
 
-  // Write meta blocks and metaindex block with the following order.
+  // Write meta blocks, metaindex block and footer in the following order.
   //    1. [meta block: filter]
   //    2. [meta block: index]
   //    3. [meta block: compression dictionary]
   //    4. [meta block: range deletion tombstone]
   //    5. [meta block: properties]
   //    6. [metaindex block]
+  //    7. Footer
   BlockHandle metaindex_block_handle, index_block_handle;
   MetaIndexBuilder meta_index_builder;
   WriteFilterBlock(&meta_index_builder);
@@ -866,33 +942,8 @@ Status BlockBasedTableBuilder::Finish() {
     WriteRawBlock(meta_index_builder.Finish(), kNoCompression,
                   &metaindex_block_handle);
   }
-
-  // Write footer
   if (ok()) {
-    // No need to write out new footer if we're using default checksum.
-    // We're writing legacy magic number because we want old versions of RocksDB
-    // be able to read files generated with new release (just in case if
-    // somebody wants to roll back after an upgrade)
-    // TODO(icanadi) at some point in the future, when we're absolutely sure
-    // nobody will roll back to RocksDB 2.x versions, retire the legacy magic
-    // number and always write new table files with new magic number
-    bool legacy = (r->table_options.format_version == 0);
-    // this is guaranteed by BlockBasedTableBuilder's constructor
-    assert(r->table_options.checksum == kCRC32c ||
-           r->table_options.format_version != 0);
-    Footer footer(legacy ? kLegacyBlockBasedTableMagicNumber
-                         : kBlockBasedTableMagicNumber,
-                  r->table_options.format_version);
-    footer.set_metaindex_handle(metaindex_block_handle);
-    footer.set_index_handle(index_block_handle);
-    footer.set_checksum(r->table_options.checksum);
-    std::string footer_encoding;
-    footer.EncodeTo(&footer_encoding);
-    assert(r->status.ok());
-    r->status = r->file->Append(footer_encoding);
-    if (r->status.ok()) {
-      r->offset += footer_encoding.size();
-    }
+    WriteFooter(metaindex_block_handle, index_block_handle);
   }
 
   return r->status;

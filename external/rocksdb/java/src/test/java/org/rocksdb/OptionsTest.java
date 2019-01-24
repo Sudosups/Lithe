@@ -13,6 +13,7 @@ import java.util.Random;
 
 import org.junit.ClassRule;
 import org.junit.Test;
+import org.rocksdb.test.RemoveEmptyValueCompactionFilterFactory;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -646,6 +647,26 @@ public class OptionsTest {
   }
 
   @Test
+  public void setWriteBufferManager() throws RocksDBException {
+    try (final Options opt = new Options();
+         final Cache cache = new LRUCache(1 * 1024 * 1024);
+         final WriteBufferManager writeBufferManager = new WriteBufferManager(2000l, cache)) {
+      opt.setWriteBufferManager(writeBufferManager);
+      assertThat(opt.writeBufferManager()).isEqualTo(writeBufferManager);
+    }
+  }
+
+  @Test
+  public void setWriteBufferManagerWithZeroBufferSize() throws RocksDBException {
+    try (final Options opt = new Options();
+         final Cache cache = new LRUCache(1 * 1024 * 1024);
+         final WriteBufferManager writeBufferManager = new WriteBufferManager(0l, cache)) {
+      opt.setWriteBufferManager(writeBufferManager);
+      assertThat(opt.writeBufferManager()).isEqualTo(writeBufferManager);
+    }
+  }
+
+  @Test
   public void accessHintOnCompactionStart() {
     try (final Options opt = new Options()) {
       final AccessHint accessHint = AccessHint.SEQUENTIAL;
@@ -1122,4 +1143,23 @@ public class OptionsTest {
           isEqualTo(booleanValue);
     }
   }
+
+  @Test
+  public void compactionFilter() {
+    try(final Options options = new Options();
+        final RemoveEmptyValueCompactionFilter cf = new RemoveEmptyValueCompactionFilter()) {
+      options.setCompactionFilter(cf);
+      assertThat(options.compactionFilter()).isEqualTo(cf);
+    }
+  }
+
+  @Test
+  public void compactionFilterFactory() {
+    try(final Options options = new Options();
+        final RemoveEmptyValueCompactionFilterFactory cff = new RemoveEmptyValueCompactionFilterFactory()) {
+      options.setCompactionFilterFactory(cff);
+      assertThat(options.compactionFilterFactory()).isEqualTo(cff);
+    }
+  }
+
 }

@@ -13,6 +13,7 @@
 
 #include <inttypes.h>
 #include <algorithm>
+#include <atomic>
 #include <functional>
 #include <string>
 #include <thread>
@@ -27,6 +28,7 @@
 #include "rocksdb/utilities/transaction_db.h"
 #include "table/mock_table.h"
 #include "util/fault_injection_test_env.h"
+#include "util/mutexlock.h"
 #include "util/random.h"
 #include "util/string_util.h"
 #include "util/sync_point.h"
@@ -351,6 +353,39 @@ class WritePreparedTransactionTestBase : public TransactionTestBase {
       : TransactionTestBase(use_stackable_db, two_write_queue, write_policy){};
 
  protected:
+  // TODO(myabandeh): Avoid duplicating PessimisticTransaction::Open logic here.
+  void DestroyAndReopenWithExtraOptions(size_t snapshot_cache_bits,
+                                        size_t commit_cache_bits) {
+    delete db;
+    db = nullptr;
+    DestroyDB(dbname, options);
+
+    options.create_if_missing = true;
+    ColumnFamilyOptions cf_options(options);
+    std::vector<ColumnFamilyDescriptor> column_families;
+    std::vector<ColumnFamilyHandle*> handles;
+    column_families.push_back(
+        ColumnFamilyDescriptor(kDefaultColumnFamilyName, cf_options));
+    std::vector<size_t> compaction_enabled_cf_indices;
+    TransactionDB::PrepareWrap(&options, &column_families,
+                               &compaction_enabled_cf_indices);
+    DB* base_db = nullptr;
+    ASSERT_OK(DBImpl::Open(options, dbname, column_families, &handles, &base_db,
+                           true /*use_seq_per_batch*/,
+                           false /*use_batch_for_txn*/));
+
+    // The following is equivalent of WrapDB().
+    txn_db_options.write_policy = WRITE_PREPARED;
+    auto* wp_db = new WritePreparedTxnDB(
+        base_db, txn_db_options, snapshot_cache_bits, commit_cache_bits);
+    wp_db->UpdateCFComparatorMap(handles);
+    ASSERT_OK(wp_db->Initialize(compaction_enabled_cf_indices, handles));
+
+    ASSERT_EQ(1, handles.size());
+    delete handles[0];
+    db = wp_db;
+  }
+
   // If expect_update is set, check if it actually updated old_commit_map_. If
   // it did not and yet suggested not to check the next snapshot, do the
   // opposite to check if it was not a bad suggestion.
@@ -493,8 +528,10 @@ class WritePreparedTransactionTestBase : public TransactionTestBase {
   // Verify all versions of keys.
   void VerifyInternalKeys(const std::vector<KeyVersion>& expected_versions) {
     std::vector<KeyVersion> versions;
+    const size_t kMaxKeys = 100000;
     ASSERT_OK(GetAllKeyVersions(db, expected_versions.front().user_key,
-                                expected_versions.back().user_key, &versions));
+                                expected_versions.back().user_key, kMaxKeys,
+                                &versions));
     ASSERT_EQ(expected_versions.size(), versions.size());
     for (size_t i = 0; i < versions.size(); i++) {
       ASSERT_EQ(expected_versions[i].user_key, versions[i].user_key);
@@ -729,6 +766,78 @@ TEST_P(WritePreparedTransactionTest, MaybeUpdateOldCommitMap) {
   MaybeUpdateOldCommitMapTestWithNext(p, c, s, ns, false);
 }
 
+// Reproduce the bug with two snapshots with the same seuqence number and test
+// that the release of the first snapshot will not affect the reads by the other
+// snapshot
+TEST_P(WritePreparedTransactionTest, DoubleSnapshot) {
+  TransactionOptions txn_options;
+  Status s;
+
+  // Insert initial value
+  ASSERT_OK(db->Put(WriteOptions(), "key", "value1"));
+
+  WritePreparedTxnDB* wp_db = dynamic_cast<WritePreparedTxnDB*>(db);
+  Transaction* txn =
+      wp_db->BeginTransaction(WriteOptions(), txn_options, nullptr);
+  ASSERT_OK(txn->SetName("txn"));
+  ASSERT_OK(txn->Put("key", "value2"));
+  ASSERT_OK(txn->Prepare());
+  // Three snapshots with the same seq number
+  const Snapshot* snapshot0 = wp_db->GetSnapshot();
+  const Snapshot* snapshot1 = wp_db->GetSnapshot();
+  const Snapshot* snapshot2 = wp_db->GetSnapshot();
+  ASSERT_OK(txn->Commit());
+  SequenceNumber cache_size = wp_db->COMMIT_CACHE_SIZE;
+  SequenceNumber overlap_seq = txn->GetId() + cache_size;
+  delete txn;
+
+  // 4th snapshot with a larger seq
+  const Snapshot* snapshot3 = wp_db->GetSnapshot();
+  // Cause an eviction to advance max evicted seq number
+  // This also fetches the 4 snapshots from db since their seq is lower than the
+  // new max
+  wp_db->AddCommitted(overlap_seq, overlap_seq);
+
+  ReadOptions ropt;
+  // It should see the value before commit
+  ropt.snapshot = snapshot2;
+  PinnableSlice pinnable_val;
+  s = wp_db->Get(ropt, wp_db->DefaultColumnFamily(), "key", &pinnable_val);
+  ASSERT_OK(s);
+  ASSERT_TRUE(pinnable_val == "value1");
+  pinnable_val.Reset();
+
+  wp_db->ReleaseSnapshot(snapshot1);
+
+  // It should still see the value before commit
+  s = wp_db->Get(ropt, wp_db->DefaultColumnFamily(), "key", &pinnable_val);
+  ASSERT_OK(s);
+  ASSERT_TRUE(pinnable_val == "value1");
+  pinnable_val.Reset();
+
+  // Cause an eviction to advance max evicted seq number and trigger updating
+  // the snapshot list
+  overlap_seq += cache_size;
+  wp_db->AddCommitted(overlap_seq, overlap_seq);
+
+  // It should still see the value before commit
+  s = wp_db->Get(ropt, wp_db->DefaultColumnFamily(), "key", &pinnable_val);
+  ASSERT_OK(s);
+  ASSERT_TRUE(pinnable_val == "value1");
+  pinnable_val.Reset();
+
+  wp_db->ReleaseSnapshot(snapshot0);
+  wp_db->ReleaseSnapshot(snapshot2);
+  wp_db->ReleaseSnapshot(snapshot3);
+}
+
+size_t UniqueCnt(std::vector<SequenceNumber> vec) {
+  std::set<SequenceNumber> aset;
+  for (auto i : vec) {
+    aset.insert(i);
+  }
+  return aset.size();
+}
 // Test that the entries in old_commit_map_ get garbage collected properly
 TEST_P(WritePreparedTransactionTest, OldCommitMapGC) {
   const size_t snapshot_cache_bits = 0;
@@ -777,9 +886,9 @@ TEST_P(WritePreparedTransactionTest, OldCommitMapGC) {
     ASSERT_FALSE(wp_db->old_commit_map_empty_.load());
     ReadLock rl(&wp_db->old_commit_map_mutex_);
     ASSERT_EQ(3, wp_db->old_commit_map_.size());
-    ASSERT_EQ(2, wp_db->old_commit_map_[snap_seq1].size());
-    ASSERT_EQ(1, wp_db->old_commit_map_[snap_seq2].size());
-    ASSERT_EQ(1, wp_db->old_commit_map_[snap_seq3].size());
+    ASSERT_EQ(2, UniqueCnt(wp_db->old_commit_map_[snap_seq1]));
+    ASSERT_EQ(1, UniqueCnt(wp_db->old_commit_map_[snap_seq2]));
+    ASSERT_EQ(1, UniqueCnt(wp_db->old_commit_map_[snap_seq3]));
   }
 
   // Verify that the 2nd snapshot is cleaned up after the release
@@ -788,8 +897,8 @@ TEST_P(WritePreparedTransactionTest, OldCommitMapGC) {
     ASSERT_FALSE(wp_db->old_commit_map_empty_.load());
     ReadLock rl(&wp_db->old_commit_map_mutex_);
     ASSERT_EQ(2, wp_db->old_commit_map_.size());
-    ASSERT_EQ(2, wp_db->old_commit_map_[snap_seq1].size());
-    ASSERT_EQ(1, wp_db->old_commit_map_[snap_seq3].size());
+    ASSERT_EQ(2, UniqueCnt(wp_db->old_commit_map_[snap_seq1]));
+    ASSERT_EQ(1, UniqueCnt(wp_db->old_commit_map_[snap_seq3]));
   }
 
   // Verify that the 1st snapshot is cleaned up after the release
@@ -798,7 +907,7 @@ TEST_P(WritePreparedTransactionTest, OldCommitMapGC) {
     ASSERT_FALSE(wp_db->old_commit_map_empty_.load());
     ReadLock rl(&wp_db->old_commit_map_mutex_);
     ASSERT_EQ(1, wp_db->old_commit_map_.size());
-    ASSERT_EQ(1, wp_db->old_commit_map_[snap_seq3].size());
+    ASSERT_EQ(1, UniqueCnt(wp_db->old_commit_map_[snap_seq3]));
   }
 
   // Verify that the 3rd snapshot is cleaned up after the release
@@ -814,6 +923,7 @@ TEST_P(WritePreparedTransactionTest, CheckAgainstSnapshotsTest) {
   std::vector<SequenceNumber> snapshots = {100l, 200l, 300l, 400l, 500l,
                                            600l, 700l, 800l, 900l};
   const size_t snapshot_cache_bits = 2;
+  const uint64_t cache_size = 1ul << snapshot_cache_bits;
   // Safety check to express the intended size in the test. Can be adjusted if
   // the snapshots lists changed.
   assert((1ul << snapshot_cache_bits) * 2 + 1 == snapshots.size());
@@ -840,6 +950,57 @@ TEST_P(WritePreparedTransactionTest, CheckAgainstSnapshotsTest) {
                          commit_entry.commit_seq >= snapshots.front() &&
                          commit_entry.prep_seq <= snapshots.back();
     ASSERT_EQ(expect_update, !wp_db->old_commit_map_empty_);
+  }
+
+  // Test that search will include multiple snapshot from snapshot cache
+  {
+    // exclude first and last item in the cache
+    CommitEntry commit_entry = {snapshots.front() + 1,
+                                snapshots[cache_size - 1] - 1};
+    wp_db->old_commit_map_empty_ = true;  // reset
+    wp_db->old_commit_map_.clear();
+    wp_db->CheckAgainstSnapshots(commit_entry);
+    ASSERT_EQ(wp_db->old_commit_map_.size(), cache_size - 2);
+  }
+
+  // Test that search will include multiple snapshot from old snapshots
+  {
+    // include two in the middle
+    CommitEntry commit_entry = {snapshots[cache_size] + 1,
+                                snapshots[cache_size + 2] + 1};
+    wp_db->old_commit_map_empty_ = true;  // reset
+    wp_db->old_commit_map_.clear();
+    wp_db->CheckAgainstSnapshots(commit_entry);
+    ASSERT_EQ(wp_db->old_commit_map_.size(), 2);
+  }
+
+  // Test that search will include both snapshot cache and old snapshots
+  // Case 1: includes all in snapshot cache
+  {
+    CommitEntry commit_entry = {snapshots.front() - 1, snapshots.back() + 1};
+    wp_db->old_commit_map_empty_ = true;  // reset
+    wp_db->old_commit_map_.clear();
+    wp_db->CheckAgainstSnapshots(commit_entry);
+    ASSERT_EQ(wp_db->old_commit_map_.size(), snapshots.size());
+  }
+
+  // Case 2: includes all snapshot caches except the smallest
+  {
+    CommitEntry commit_entry = {snapshots.front() + 1, snapshots.back() + 1};
+    wp_db->old_commit_map_empty_ = true;  // reset
+    wp_db->old_commit_map_.clear();
+    wp_db->CheckAgainstSnapshots(commit_entry);
+    ASSERT_EQ(wp_db->old_commit_map_.size(), snapshots.size() - 1);
+  }
+
+  // Case 3: includes only the largest of snapshot cache
+  {
+    CommitEntry commit_entry = {snapshots[cache_size - 1] - 1,
+                                snapshots.back() + 1};
+    wp_db->old_commit_map_empty_ = true;  // reset
+    wp_db->old_commit_map_.clear();
+    wp_db->CheckAgainstSnapshots(commit_entry);
+    ASSERT_EQ(wp_db->old_commit_map_.size(), snapshots.size() - cache_size + 1);
   }
 }
 
@@ -985,6 +1146,138 @@ TEST_P(WritePreparedTransactionTest, AdvanceMaxEvictedSeqBasicTest) {
   }
 }
 
+// A new snapshot should always be always larger than max_evicted_seq_
+// Otherwise the snapshot does not go through AdvanceMaxEvictedSeq
+TEST_P(WritePreparedTransactionTest, NewSnapshotLargerThanMax) {
+  WriteOptions woptions;
+  TransactionOptions txn_options;
+  WritePreparedTxnDB* wp_db = dynamic_cast<WritePreparedTxnDB*>(db);
+  Transaction* txn0 = db->BeginTransaction(woptions, txn_options);
+  ASSERT_OK(txn0->Put(Slice("key"), Slice("value")));
+  ASSERT_OK(txn0->Commit());
+  const SequenceNumber seq = txn0->GetId();  // is also prepare seq
+  delete txn0;
+  std::vector<Transaction*> txns;
+  // Inc seq without committing anything
+  for (int i = 0; i < 10; i++) {
+    Transaction* txn = db->BeginTransaction(woptions, txn_options);
+    ASSERT_OK(txn->SetName("xid" + std::to_string(i)));
+    ASSERT_OK(txn->Put(Slice("key" + std::to_string(i)), Slice("value")));
+    ASSERT_OK(txn->Prepare());
+    txns.push_back(txn);
+  }
+
+  // The new commit is seq + 10
+  ASSERT_OK(db->Put(woptions, "key", "value"));
+  auto snap = wp_db->GetSnapshot();
+  const SequenceNumber last_seq = snap->GetSequenceNumber();
+  wp_db->ReleaseSnapshot(snap);
+  ASSERT_LT(seq, last_seq);
+  // Otherwise our test is not effective
+  ASSERT_LT(last_seq - seq, wp_db->INC_STEP_FOR_MAX_EVICTED);
+
+  // Evict seq out of commit cache
+  const SequenceNumber overwrite_seq = seq + wp_db->COMMIT_CACHE_SIZE;
+  // Check that the next write could make max go beyond last
+  auto last_max = wp_db->max_evicted_seq_.load();
+  wp_db->AddCommitted(overwrite_seq, overwrite_seq);
+  // Check that eviction has advanced the max
+  ASSERT_LT(last_max, wp_db->max_evicted_seq_.load());
+  // Check that the new max has not advanced the last seq
+  ASSERT_LT(wp_db->max_evicted_seq_.load(), last_seq);
+  for (auto txn : txns) {
+    txn->Rollback();
+    delete txn;
+  }
+}
+
+// A new snapshot should always be always larger than max_evicted_seq_
+// In very rare cases max could be below last published seq. Test that
+// taking snapshot will wait for max to catch up.
+TEST_P(WritePreparedTransactionTest, MaxCatchupWithNewSnapshot) {
+  const size_t snapshot_cache_bits = 7;  // same as default
+  const size_t commit_cache_bits = 0;    // only 1 entry => frequent eviction
+  DestroyAndReopenWithExtraOptions(snapshot_cache_bits, commit_cache_bits);
+  WriteOptions woptions;
+  WritePreparedTxnDB* wp_db = dynamic_cast<WritePreparedTxnDB*>(db);
+
+  const int writes = 50;
+  const int batch_cnt = 4;
+  rocksdb::port::Thread t1([&]() {
+    for (int i = 0; i < writes; i++) {
+      WriteBatch batch;
+      // For duplicate keys cause 4 commit entires, each evicting an entry that
+      // is not published yet, thus causing max ecited seq go higher than last
+      // published.
+      for (int b = 0; b < batch_cnt; b++) {
+        batch.Put("foo", "foo");
+      }
+      db->Write(woptions, &batch);
+    }
+  });
+
+  rocksdb::port::Thread t2([&]() {
+    while (wp_db->max_evicted_seq_ == 0) {  // wait for insert thread
+      std::this_thread::yield();
+    }
+    for (int i = 0; i < 10; i++) {
+      auto snap = db->GetSnapshot();
+      if (snap->GetSequenceNumber() != 0) {
+        ASSERT_LT(wp_db->max_evicted_seq_, snap->GetSequenceNumber());
+      }  // seq 0 is ok to be less than max since nothing is visible to it
+      db->ReleaseSnapshot(snap);
+    }
+  });
+
+  t1.join();
+  t2.join();
+
+  // Make sure that the test has worked and seq number has advanced as we
+  // thought
+  auto snap = db->GetSnapshot();
+  ASSERT_GT(snap->GetSequenceNumber(), batch_cnt * writes - 1);
+  db->ReleaseSnapshot(snap);
+}
+
+TEST_P(WritePreparedTransactionTest, AdvanceSeqByOne) {
+  auto snap = db->GetSnapshot();
+  auto seq1 = snap->GetSequenceNumber();
+  db->ReleaseSnapshot(snap);
+
+  WritePreparedTxnDB* wp_db = dynamic_cast<WritePreparedTxnDB*>(db);
+  wp_db->AdvanceSeqByOne();
+
+  snap = db->GetSnapshot();
+  auto seq2 = snap->GetSequenceNumber();
+  db->ReleaseSnapshot(snap);
+
+  ASSERT_LT(seq1, seq2);
+}
+
+// Test that the txn Initilize calls the overridden functions
+TEST_P(WritePreparedTransactionTest, TxnInitialize) {
+  TransactionOptions txn_options;
+  WriteOptions write_options;
+  Transaction* txn0 = db->BeginTransaction(write_options, txn_options);
+  ASSERT_OK(txn0->SetName("xid"));
+  ASSERT_OK(txn0->Put(Slice("key"), Slice("value1")));
+  ASSERT_OK(txn0->Prepare());
+
+  // SetSnapshot is overridden to update min_uncommitted_
+  txn_options.set_snapshot = true;
+  Transaction* txn1 = db->BeginTransaction(write_options, txn_options);
+  auto snap = txn1->GetSnapshot();
+  auto snap_impl = reinterpret_cast<const SnapshotImpl*>(snap);
+  // If ::Initialize calls the overriden SetSnapshot, min_uncommitted_ must be
+  // udpated
+  ASSERT_GT(snap_impl->min_uncommitted_, 0);
+
+  txn0->Rollback();
+  txn1->Rollback();
+  delete txn0;
+  delete txn1;
+}
+
 // This tests that transactions with duplicate keys perform correctly after max
 // is advancing their prepared sequence numbers. This will not be the case if
 // for example the txn does not add the prepared seq for the second sub-batch to
@@ -1013,6 +1306,7 @@ TEST_P(WritePreparedTransactionTest, AdvanceMaxEvictedSeqWithDuplicatesTest) {
   wp_db->db_impl_->FlushWAL(true);
   wp_db->TEST_Crash();
   ReOpenNoDelete();
+  assert(db != nullptr);
   wp_db = dynamic_cast<WritePreparedTxnDB*>(db);
   wp_db->AdvanceMaxEvictedSeq(0, new_max);
   s = db->Get(ropt, db->DefaultColumnFamily(), "key", &pinnable_val);
@@ -1144,21 +1438,23 @@ TEST_P(SeqAdvanceConcurrentTest, SeqAdvanceConcurrentTest) {
     // Check if recovery preserves the last sequence number
     db_impl->FlushWAL(true);
     ReOpenNoDelete();
+    assert(db != nullptr);
     db_impl = reinterpret_cast<DBImpl*>(db->GetRootDB());
     seq = db_impl->TEST_GetLastVisibleSequence();
-    ASSERT_EQ(exp_seq, seq);
+    ASSERT_LE(exp_seq, seq);
 
     // Check if flush preserves the last sequence number
     db_impl->Flush(fopt);
     seq = db_impl->GetLatestSequenceNumber();
-    ASSERT_EQ(exp_seq, seq);
+    ASSERT_LE(exp_seq, seq);
 
     // Check if recovery after flush preserves the last sequence number
     db_impl->FlushWAL(true);
     ReOpenNoDelete();
+    assert(db != nullptr);
     db_impl = reinterpret_cast<DBImpl*>(db->GetRootDB());
     seq = db_impl->GetLatestSequenceNumber();
-    ASSERT_EQ(exp_seq, seq);
+    ASSERT_LE(exp_seq, seq);
   }
 }
 
@@ -1210,6 +1506,7 @@ TEST_P(WritePreparedTransactionTest, BasicRecoveryTest) {
   wp_db->db_impl_->FlushWAL(true);
   wp_db->TEST_Crash();
   ReOpenNoDelete();
+  assert(db != nullptr);
   wp_db = dynamic_cast<WritePreparedTxnDB*>(db);
   // After recovery, all the uncommitted txns (0 and 1) should be inserted into
   // delayed_prepared_
@@ -1254,6 +1551,7 @@ TEST_P(WritePreparedTransactionTest, BasicRecoveryTest) {
   wp_db->db_impl_->FlushWAL(true);
   wp_db->TEST_Crash();
   ReOpenNoDelete();
+  assert(db != nullptr);
   wp_db = dynamic_cast<WritePreparedTxnDB*>(db);
   ASSERT_TRUE(wp_db->prepared_txns_.empty());
   ASSERT_FALSE(wp_db->delayed_prepared_empty_);
@@ -1288,6 +1586,7 @@ TEST_P(WritePreparedTransactionTest, BasicRecoveryTest) {
   delete txn2;
   wp_db->db_impl_->FlushWAL(true);
   ReOpenNoDelete();
+  assert(db != nullptr);
   wp_db = dynamic_cast<WritePreparedTxnDB*>(db);
   ASSERT_TRUE(wp_db->prepared_txns_.empty());
   ASSERT_TRUE(wp_db->delayed_prepared_empty_);
@@ -1299,67 +1598,139 @@ TEST_P(WritePreparedTransactionTest, BasicRecoveryTest) {
   pinnable_val.Reset();
 }
 
-// After recovery the new transactions should still conflict with recovered
-// transactions.
-TEST_P(WritePreparedTransactionTest, ConflictDetectionAfterRecoveryTest) {
-  options.disable_auto_compactions = true;
-  ReOpen();
+// After recovery the commit map is empty while the max is set. The code would
+// go through a different path which requires a separate test. Test that the
+// committed data before the restart is visible to all snapshots.
+TEST_P(WritePreparedTransactionTest, IsInSnapshotEmptyMapTest) {
+  for (bool end_with_prepare : {false, true}) {
+    ReOpen();
+    WriteOptions woptions;
+    ASSERT_OK(db->Put(woptions, "key", "value"));
+    ASSERT_OK(db->Put(woptions, "key", "value"));
+    ASSERT_OK(db->Put(woptions, "key", "value"));
+    SequenceNumber prepare_seq = kMaxSequenceNumber;
+    if (end_with_prepare) {
+      TransactionOptions txn_options;
+      Transaction* txn = db->BeginTransaction(woptions, txn_options);
+      ASSERT_OK(txn->SetName("xid0"));
+      ASSERT_OK(txn->Prepare());
+      prepare_seq = txn->GetId();
+      delete txn;
+    }
+    dynamic_cast<WritePreparedTxnDB*>(db)->TEST_Crash();
+    auto db_impl = reinterpret_cast<DBImpl*>(db->GetRootDB());
+    db_impl->FlushWAL(true);
+    ReOpenNoDelete();
+    WritePreparedTxnDB* wp_db = dynamic_cast<WritePreparedTxnDB*>(db);
+    assert(wp_db != nullptr);
+    ASSERT_GT(wp_db->max_evicted_seq_, 0);  // max after recovery
+    // Take a snapshot right after recovery
+    const Snapshot* snap = db->GetSnapshot();
+    auto snap_seq = snap->GetSequenceNumber();
+    ASSERT_GT(snap_seq, 0);
 
-  TransactionOptions txn_options;
-  WriteOptions write_options;
-  size_t index = 0;
-  Transaction* txn0 = db->BeginTransaction(write_options, txn_options);
-  auto istr0 = std::to_string(index);
-  auto s = txn0->SetName("xid" + istr0);
-  ASSERT_OK(s);
-  s = txn0->Put(Slice("key" + istr0), Slice("bar0" + istr0));
-  ASSERT_OK(s);
-  s = txn0->Prepare();
+    for (SequenceNumber seq = 0;
+         seq <= wp_db->max_evicted_seq_ && seq != prepare_seq; seq++) {
+      ASSERT_TRUE(wp_db->IsInSnapshot(seq, snap_seq));
+    }
+    if (end_with_prepare) {
+      ASSERT_FALSE(wp_db->IsInSnapshot(prepare_seq, snap_seq));
+    }
+    // trivial check
+    ASSERT_FALSE(wp_db->IsInSnapshot(snap_seq + 1, snap_seq));
 
-  // With the same index 0 and key prefix, txn_t0 should conflict with txn0
-  txn_t0_with_status(0, Status::TimedOut());
-  delete txn0;
+    db->ReleaseSnapshot(snap);
 
-  auto db_impl = reinterpret_cast<DBImpl*>(db->GetRootDB());
-  db_impl->FlushWAL(true);
-  dynamic_cast<WritePreparedTxnDB*>(db)->TEST_Crash();
-  ReOpenNoDelete();
+    ASSERT_OK(db->Put(woptions, "key", "value"));
+    // Take a snapshot after some writes
+    snap = db->GetSnapshot();
+    snap_seq = snap->GetSequenceNumber();
+    for (SequenceNumber seq = 0;
+         seq <= wp_db->max_evicted_seq_ && seq != prepare_seq; seq++) {
+      ASSERT_TRUE(wp_db->IsInSnapshot(seq, snap_seq));
+    }
+    if (end_with_prepare) {
+      ASSERT_FALSE(wp_db->IsInSnapshot(prepare_seq, snap_seq));
+    }
+    // trivial check
+    ASSERT_FALSE(wp_db->IsInSnapshot(snap_seq + 1, snap_seq));
 
-  // It should still conflict after the recovery
-  txn_t0_with_status(0, Status::TimedOut());
-
-  db_impl = reinterpret_cast<DBImpl*>(db->GetRootDB());
-  db_impl->FlushWAL(true);
-  ReOpenNoDelete();
-
-  // Check that a recovered txn will still cause conflicts after 2nd recovery
-  txn_t0_with_status(0, Status::TimedOut());
-
-  txn0 = db->GetTransactionByName("xid" + istr0);
-  ASSERT_NE(txn0, nullptr);
-  txn0->Commit();
-  delete txn0;
-
-  db_impl = reinterpret_cast<DBImpl*>(db->GetRootDB());
-  db_impl->FlushWAL(true);
-  ReOpenNoDelete();
-
-  // tnx0 is now committed and should no longer cause a conflict
-  txn_t0_with_status(0, Status::OK());
+    db->ReleaseSnapshot(snap);
+  }
 }
 
-// After recovery the commit map is empty while the max is set. The code would
-// go through a different path which requires a separate test.
-TEST_P(WritePreparedTransactionTest, IsInSnapshotEmptyMapTest) {
+// Shows the contract of IsInSnapshot when called on invalid/released snapshots
+TEST_P(WritePreparedTransactionTest, IsInSnapshotReleased) {
   WritePreparedTxnDB* wp_db = dynamic_cast<WritePreparedTxnDB*>(db);
-  wp_db->max_evicted_seq_ = 100;
-  ASSERT_FALSE(wp_db->IsInSnapshot(50, 40));
-  ASSERT_TRUE(wp_db->IsInSnapshot(50, 50));
-  ASSERT_TRUE(wp_db->IsInSnapshot(50, 100));
-  ASSERT_TRUE(wp_db->IsInSnapshot(50, 150));
-  ASSERT_FALSE(wp_db->IsInSnapshot(100, 80));
-  ASSERT_TRUE(wp_db->IsInSnapshot(100, 100));
-  ASSERT_TRUE(wp_db->IsInSnapshot(100, 150));
+  WriteOptions woptions;
+  ASSERT_OK(db->Put(woptions, "key", "value"));
+  // snap seq = 1
+  const Snapshot* snap1 = db->GetSnapshot();
+  ASSERT_OK(db->Put(woptions, "key", "value"));
+  ASSERT_OK(db->Put(woptions, "key", "value"));
+  // snap seq = 3
+  const Snapshot* snap2 = db->GetSnapshot();
+  const SequenceNumber seq = 1;
+  // Evict seq out of commit cache
+  size_t overwrite_seq = wp_db->COMMIT_CACHE_SIZE + seq;
+  wp_db->AddCommitted(overwrite_seq, overwrite_seq);
+  SequenceNumber snap_seq;
+  uint64_t min_uncommitted = 0;
+  bool released;
+
+  released = false;
+  snap_seq = snap1->GetSequenceNumber();
+  ASSERT_LE(seq, snap_seq);
+  // Valid snapshot lower than max
+  ASSERT_LE(snap_seq, wp_db->max_evicted_seq_);
+  ASSERT_TRUE(wp_db->IsInSnapshot(seq, snap_seq, min_uncommitted, &released));
+  ASSERT_FALSE(released);
+
+  released = false;
+  snap_seq = snap1->GetSequenceNumber();
+  // Invaid snapshot lower than max
+  ASSERT_LE(snap_seq + 1, wp_db->max_evicted_seq_);
+  ASSERT_TRUE(
+      wp_db->IsInSnapshot(seq, snap_seq + 1, min_uncommitted, &released));
+  ASSERT_TRUE(released);
+
+  db->ReleaseSnapshot(snap1);
+
+  released = false;
+  // Released snapshot lower than max
+  ASSERT_TRUE(wp_db->IsInSnapshot(seq, snap_seq, min_uncommitted, &released));
+  // The release does not take affect until the next max advance
+  ASSERT_FALSE(released);
+
+  released = false;
+  // Invaid snapshot lower than max
+  ASSERT_TRUE(
+      wp_db->IsInSnapshot(seq, snap_seq + 1, min_uncommitted, &released));
+  ASSERT_TRUE(released);
+
+  // This make the snapshot release to reflect in txn db structures
+  wp_db->AdvanceMaxEvictedSeq(wp_db->max_evicted_seq_,
+                              wp_db->max_evicted_seq_ + 1);
+
+  released = false;
+  // Released snapshot lower than max
+  ASSERT_TRUE(wp_db->IsInSnapshot(seq, snap_seq, min_uncommitted, &released));
+  ASSERT_TRUE(released);
+
+  released = false;
+  // Invaid snapshot lower than max
+  ASSERT_TRUE(
+      wp_db->IsInSnapshot(seq, snap_seq + 1, min_uncommitted, &released));
+  ASSERT_TRUE(released);
+
+  snap_seq = snap2->GetSequenceNumber();
+
+  released = false;
+  // Unreleased snapshot lower than max
+  ASSERT_TRUE(wp_db->IsInSnapshot(seq, snap_seq, min_uncommitted, &released));
+  ASSERT_FALSE(released);
+
+  db->ReleaseSnapshot(snap2);
 }
 
 // Test WritePreparedTxnDB's IsInSnapshot against different ordering of
@@ -1588,6 +1959,7 @@ TEST_P(WritePreparedTransactionTest, RollbackTest) {
           db_impl->FlushWAL(true);
           dynamic_cast<WritePreparedTxnDB*>(db)->TEST_Crash();
           ReOpenNoDelete();
+          assert(db != nullptr);
           wp_db = dynamic_cast<WritePreparedTxnDB*>(db);
           txn = db->GetTransactionByName("xid0");
           ASSERT_FALSE(wp_db->delayed_prepared_empty_);
@@ -1825,6 +2197,254 @@ TEST_P(WritePreparedTransactionTest, CompactionShouldKeepSnapshotVisibleKeys) {
   db->ReleaseSnapshot(snapshot2);
 }
 
+TEST_P(WritePreparedTransactionTest, SmallestUncommittedOptimization) {
+  const size_t snapshot_cache_bits = 7;  // same as default
+  const size_t commit_cache_bits = 0;    // disable commit cache
+  for (bool has_recent_prepare : {true, false}) {
+    DestroyAndReopenWithExtraOptions(snapshot_cache_bits, commit_cache_bits);
+
+    ASSERT_OK(db->Put(WriteOptions(), "key1", "value1"));
+    auto* transaction =
+        db->BeginTransaction(WriteOptions(), TransactionOptions(), nullptr);
+    ASSERT_OK(transaction->SetName("txn"));
+    ASSERT_OK(transaction->Delete("key1"));
+    ASSERT_OK(transaction->Prepare());
+    // snapshot1 should get min_uncommitted from prepared_txns_ heap.
+    auto snapshot1 = db->GetSnapshot();
+    ASSERT_EQ(transaction->GetId(),
+              ((SnapshotImpl*)snapshot1)->min_uncommitted_);
+    // Add a commit to advance max_evicted_seq and move the prepared transaction
+    // into delayed_prepared_ set.
+    ASSERT_OK(db->Put(WriteOptions(), "key2", "value2"));
+    Transaction* txn2 = nullptr;
+    if (has_recent_prepare) {
+      txn2 =
+          db->BeginTransaction(WriteOptions(), TransactionOptions(), nullptr);
+      ASSERT_OK(txn2->SetName("txn2"));
+      ASSERT_OK(txn2->Put("key3", "value3"));
+      ASSERT_OK(txn2->Prepare());
+    }
+    // snapshot2 should get min_uncommitted from delayed_prepared_ set.
+    auto snapshot2 = db->GetSnapshot();
+    ASSERT_EQ(transaction->GetId(),
+              ((SnapshotImpl*)snapshot1)->min_uncommitted_);
+    ASSERT_OK(transaction->Commit());
+    delete transaction;
+    if (has_recent_prepare) {
+      ASSERT_OK(txn2->Commit());
+      delete txn2;
+    }
+    VerifyKeys({{"key1", "NOT_FOUND"}});
+    VerifyKeys({{"key1", "value1"}}, snapshot1);
+    VerifyKeys({{"key1", "value1"}}, snapshot2);
+    db->ReleaseSnapshot(snapshot1);
+    db->ReleaseSnapshot(snapshot2);
+  }
+}
+
+// Insert two values, v1 and v2, for a key. Between prepare and commit of v2
+// take two snapshots, s1 and s2. Release s1 during compaction.
+// Test to make sure compaction doesn't get confused and think s1 can see both
+// values, and thus compact out the older value by mistake.
+TEST_P(WritePreparedTransactionTest, ReleaseSnapshotDuringCompaction) {
+  const size_t snapshot_cache_bits = 7;  // same as default
+  const size_t commit_cache_bits = 0;    // minimum commit cache
+  DestroyAndReopenWithExtraOptions(snapshot_cache_bits, commit_cache_bits);
+
+  ASSERT_OK(db->Put(WriteOptions(), "key1", "value1_1"));
+  auto* transaction =
+      db->BeginTransaction(WriteOptions(), TransactionOptions(), nullptr);
+  ASSERT_OK(transaction->SetName("txn"));
+  ASSERT_OK(transaction->Put("key1", "value1_2"));
+  ASSERT_OK(transaction->Prepare());
+  auto snapshot1 = db->GetSnapshot();
+  // Increment sequence number.
+  ASSERT_OK(db->Put(WriteOptions(), "key2", "value2"));
+  auto snapshot2 = db->GetSnapshot();
+  ASSERT_OK(transaction->Commit());
+  delete transaction;
+  VerifyKeys({{"key1", "value1_2"}});
+  VerifyKeys({{"key1", "value1_1"}}, snapshot1);
+  VerifyKeys({{"key1", "value1_1"}}, snapshot2);
+  // Add a flush to avoid compaction to fallback to trivial move.
+
+  auto callback = [&](void*) {
+    // Release snapshot1 after CompactionIterator init.
+    // CompactionIterator need to figure out the earliest snapshot
+    // that can see key1:value1_2 is kMaxSequenceNumber, not
+    // snapshot1 or snapshot2.
+    db->ReleaseSnapshot(snapshot1);
+    // Add some keys to advance max_evicted_seq.
+    ASSERT_OK(db->Put(WriteOptions(), "key3", "value3"));
+    ASSERT_OK(db->Put(WriteOptions(), "key4", "value4"));
+  };
+  SyncPoint::GetInstance()->SetCallBack("CompactionIterator:AfterInit",
+                                        callback);
+  SyncPoint::GetInstance()->EnableProcessing();
+
+  ASSERT_OK(db->Flush(FlushOptions()));
+  VerifyKeys({{"key1", "value1_2"}});
+  VerifyKeys({{"key1", "value1_1"}}, snapshot2);
+  db->ReleaseSnapshot(snapshot2);
+  SyncPoint::GetInstance()->ClearAllCallBacks();
+}
+
+// Insert two values, v1 and v2, for a key. Take two snapshots, s1 and s2,
+// after committing v2. Release s1 during compaction, right after compaction
+// processes v2 and before processes v1. Test to make sure compaction doesn't
+// get confused and believe v1 and v2 are visible to different snapshot
+// (v1 by s2, v2 by s1) and refuse to compact out v1.
+TEST_P(WritePreparedTransactionTest, ReleaseSnapshotDuringCompaction2) {
+  const size_t snapshot_cache_bits = 7;  // same as default
+  const size_t commit_cache_bits = 0;    // minimum commit cache
+  DestroyAndReopenWithExtraOptions(snapshot_cache_bits, commit_cache_bits);
+
+  ASSERT_OK(db->Put(WriteOptions(), "key1", "value1"));
+  ASSERT_OK(db->Put(WriteOptions(), "key1", "value2"));
+  SequenceNumber v2_seq = db->GetLatestSequenceNumber();
+  auto* s1 = db->GetSnapshot();
+  // Advance sequence number.
+  ASSERT_OK(db->Put(WriteOptions(), "key2", "dummy"));
+  auto* s2 = db->GetSnapshot();
+
+  int count_value = 0;
+  auto callback = [&](void* arg) {
+    auto* ikey = reinterpret_cast<ParsedInternalKey*>(arg);
+    if (ikey->user_key == "key1") {
+      count_value++;
+      if (count_value == 2) {
+        // Processing v1.
+        db->ReleaseSnapshot(s1);
+        // Add some keys to advance max_evicted_seq and update
+        // old_commit_map.
+        ASSERT_OK(db->Put(WriteOptions(), "key3", "dummy"));
+        ASSERT_OK(db->Put(WriteOptions(), "key4", "dummy"));
+      }
+    }
+  };
+  SyncPoint::GetInstance()->SetCallBack("CompactionIterator:ProcessKV",
+                                        callback);
+  SyncPoint::GetInstance()->EnableProcessing();
+
+  ASSERT_OK(db->Flush(FlushOptions()));
+  // value1 should be compact out.
+  VerifyInternalKeys({{"key1", "value2", v2_seq, kTypeValue}});
+
+  // cleanup
+  db->ReleaseSnapshot(s2);
+  SyncPoint::GetInstance()->ClearAllCallBacks();
+}
+
+// Insert two values, v1 and v2, for a key. Insert another dummy key
+// so to evict the commit cache for v2, while v1 is still in commit cache.
+// Take two snapshots, s1 and s2. Release s1 during compaction.
+// Since commit cache for v2 is evicted, and old_commit_map don't have
+// s1 (it is released),
+// TODO(myabandeh): how can we be sure that the v2's commit info is evicted
+// (and not v1's)? Instead of putting a dummy, we can directly call
+// AddCommitted(v2_seq + cache_size, ...) to evict v2's entry from commit cache.
+TEST_P(WritePreparedTransactionTest, ReleaseSnapshotDuringCompaction3) {
+  const size_t snapshot_cache_bits = 7;  // same as default
+  const size_t commit_cache_bits = 1;    // commit cache size = 2
+  DestroyAndReopenWithExtraOptions(snapshot_cache_bits, commit_cache_bits);
+
+  // Add a dummy key to evict v2 commit cache, but keep v1 commit cache.
+  // It also advance max_evicted_seq and can trigger old_commit_map cleanup.
+  auto add_dummy = [&]() {
+    auto* txn_dummy =
+        db->BeginTransaction(WriteOptions(), TransactionOptions(), nullptr);
+    ASSERT_OK(txn_dummy->SetName("txn_dummy"));
+    ASSERT_OK(txn_dummy->Put("dummy", "dummy"));
+    ASSERT_OK(txn_dummy->Prepare());
+    ASSERT_OK(txn_dummy->Commit());
+    delete txn_dummy;
+  };
+
+  ASSERT_OK(db->Put(WriteOptions(), "key1", "value1"));
+  auto* txn =
+      db->BeginTransaction(WriteOptions(), TransactionOptions(), nullptr);
+  ASSERT_OK(txn->SetName("txn"));
+  ASSERT_OK(txn->Put("key1", "value2"));
+  ASSERT_OK(txn->Prepare());
+  // TODO(myabandeh): replace it with GetId()?
+  auto v2_seq = db->GetLatestSequenceNumber();
+  ASSERT_OK(txn->Commit());
+  delete txn;
+  auto* s1 = db->GetSnapshot();
+  // Dummy key to advance sequence number.
+  add_dummy();
+  auto* s2 = db->GetSnapshot();
+
+  auto callback = [&](void*) {
+    db->ReleaseSnapshot(s1);
+    // Add some dummy entries to trigger s1 being cleanup from old_commit_map.
+    add_dummy();
+    add_dummy();
+  };
+  SyncPoint::GetInstance()->SetCallBack("CompactionIterator:AfterInit",
+                                        callback);
+  SyncPoint::GetInstance()->EnableProcessing();
+
+  ASSERT_OK(db->Flush(FlushOptions()));
+  // value1 should be compact out.
+  VerifyInternalKeys({{"key1", "value2", v2_seq, kTypeValue}});
+
+  db->ReleaseSnapshot(s2);
+  SyncPoint::GetInstance()->ClearAllCallBacks();
+}
+
+TEST_P(WritePreparedTransactionTest, ReleaseEarliestSnapshotDuringCompaction) {
+  const size_t snapshot_cache_bits = 7;  // same as default
+  const size_t commit_cache_bits = 0;    // minimum commit cache
+  DestroyAndReopenWithExtraOptions(snapshot_cache_bits, commit_cache_bits);
+
+  ASSERT_OK(db->Put(WriteOptions(), "key1", "value1"));
+  auto* transaction =
+      db->BeginTransaction(WriteOptions(), TransactionOptions(), nullptr);
+  ASSERT_OK(transaction->SetName("txn"));
+  ASSERT_OK(transaction->Delete("key1"));
+  ASSERT_OK(transaction->Prepare());
+  SequenceNumber del_seq = db->GetLatestSequenceNumber();
+  auto snapshot1 = db->GetSnapshot();
+  // Increment sequence number.
+  ASSERT_OK(db->Put(WriteOptions(), "key2", "value2"));
+  auto snapshot2 = db->GetSnapshot();
+  ASSERT_OK(transaction->Commit());
+  delete transaction;
+  VerifyKeys({{"key1", "NOT_FOUND"}});
+  VerifyKeys({{"key1", "value1"}}, snapshot1);
+  VerifyKeys({{"key1", "value1"}}, snapshot2);
+  ASSERT_OK(db->Flush(FlushOptions()));
+
+  auto callback = [&](void* compaction) {
+    // Release snapshot1 after CompactionIterator init.
+    // CompactionIterator need to double check and find out snapshot2 is now
+    // the earliest existing snapshot.
+    if (compaction != nullptr) {
+      db->ReleaseSnapshot(snapshot1);
+      // Add some keys to advance max_evicted_seq.
+      ASSERT_OK(db->Put(WriteOptions(), "key3", "value3"));
+      ASSERT_OK(db->Put(WriteOptions(), "key4", "value4"));
+    }
+  };
+  SyncPoint::GetInstance()->SetCallBack("CompactionIterator:AfterInit",
+                                        callback);
+  SyncPoint::GetInstance()->EnableProcessing();
+
+  // Dummy keys to avoid compaction trivially move files and get around actual
+  // compaction logic.
+  ASSERT_OK(db->Put(WriteOptions(), "a", "dummy"));
+  ASSERT_OK(db->Put(WriteOptions(), "z", "dummy"));
+  ASSERT_OK(db->CompactRange(CompactRangeOptions(), nullptr, nullptr));
+  // Only verify for key1. Both the put and delete for the key should be kept.
+  // Since the delete tombstone is not visible to snapshot2, we need to keep
+  // at least one version of the key, for write-conflict check.
+  VerifyInternalKeys({{"key1", "", del_seq, kTypeDeletion},
+                      {"key1", "value1", 0, kTypeValue}});
+  db->ReleaseSnapshot(snapshot2);
+  SyncPoint::GetInstance()->ClearAllCallBacks();
+}
+
 // A more complex test to verify compaction/flush should keep keys visible
 // to snapshots.
 TEST_P(WritePreparedTransactionTest,
@@ -1956,6 +2576,34 @@ TEST_P(WritePreparedTransactionTest,
   delete transaction;
 }
 
+TEST_P(WritePreparedTransactionTest, CommitAndSnapshotDuringCompaction) {
+  options.disable_auto_compactions = true;
+  ReOpen();
+
+  const Snapshot* snapshot = nullptr;
+  ASSERT_OK(db->Put(WriteOptions(), "key1", "value1"));
+  auto* txn = db->BeginTransaction(WriteOptions());
+  ASSERT_OK(txn->SetName("txn"));
+  ASSERT_OK(txn->Put("key1", "value2"));
+  ASSERT_OK(txn->Prepare());
+
+  auto callback = [&](void*) {
+    // Snapshot is taken after compaction start. It should be taken into
+    // consideration for whether to compact out value1.
+    snapshot = db->GetSnapshot();
+    ASSERT_OK(txn->Commit());
+    delete txn;
+  };
+  SyncPoint::GetInstance()->SetCallBack("CompactionIterator:AfterInit",
+                                        callback);
+  SyncPoint::GetInstance()->EnableProcessing();
+  ASSERT_OK(db->Flush(FlushOptions()));
+  ASSERT_NE(nullptr, snapshot);
+  VerifyKeys({{"key1", "value2"}});
+  VerifyKeys({{"key1", "value1"}}, snapshot);
+  db->ReleaseSnapshot(snapshot);
+}
+
 TEST_P(WritePreparedTransactionTest, Iterate) {
   auto verify_state = [](Iterator* iter, const std::string& key,
                          const std::string& value) {
@@ -2015,6 +2663,81 @@ TEST_P(WritePreparedTransactionTest, IteratorRefreshNotSupported) {
   Iterator* iter = db->NewIterator(ReadOptions());
   ASSERT_TRUE(iter->Refresh().IsNotSupported());
   delete iter;
+}
+
+// When an old prepared entry gets committed, there is a gap between the time
+// that it is published and when it is cleaned up from old_prepared_. This test
+// stresses such cacese.
+TEST_P(WritePreparedTransactionTest, CommitOfOldPrepared) {
+  const size_t snapshot_cache_bits = 7;  // same as default
+  for (const size_t commit_cache_bits : {0, 2, 3}) {
+    for (const size_t sub_batch_cnt : {1, 2, 3}) {
+      DestroyAndReopenWithExtraOptions(snapshot_cache_bits, commit_cache_bits);
+      std::atomic<const Snapshot*> snap = {nullptr};
+      std::atomic<SequenceNumber> exp_prepare = {0};
+      // Value is synchronized via snap
+      PinnableSlice value;
+      // Take a snapshot after publish and before RemovePrepared:Start
+      auto callback = [&](void* param) {
+        SequenceNumber prep_seq = *((SequenceNumber*)param);
+        if (prep_seq == exp_prepare.load()) {  // only for write_thread
+          ASSERT_EQ(nullptr, snap.load());
+          snap.store(db->GetSnapshot());
+          ReadOptions roptions;
+          roptions.snapshot = snap.load();
+          auto s = db->Get(roptions, db->DefaultColumnFamily(), "key", &value);
+          ASSERT_OK(s);
+        }
+      };
+      SyncPoint::GetInstance()->SetCallBack("RemovePrepared:Start", callback);
+      SyncPoint::GetInstance()->EnableProcessing();
+      // Thread to cause frequent evictions
+      rocksdb::port::Thread eviction_thread([&]() {
+        // Too many txns might cause commit_seq - prepare_seq in another thread
+        // to go beyond DELTA_UPPERBOUND
+        for (int i = 0; i < 25 * (1 << commit_cache_bits); i++) {
+          db->Put(WriteOptions(), Slice("key1"), Slice("value1"));
+        }
+      });
+      rocksdb::port::Thread write_thread([&]() {
+        for (int i = 0; i < 25 * (1 << commit_cache_bits); i++) {
+          Transaction* txn =
+              db->BeginTransaction(WriteOptions(), TransactionOptions());
+          ASSERT_OK(txn->SetName("xid"));
+          std::string val_str = "value" + ToString(i);
+          for (size_t b = 0; b < sub_batch_cnt; b++) {
+            ASSERT_OK(txn->Put(Slice("key"), val_str));
+          }
+          ASSERT_OK(txn->Prepare());
+          // Let an eviction to kick in
+          std::this_thread::yield();
+
+          exp_prepare.store(txn->GetId());
+          ASSERT_OK(txn->Commit());
+          delete txn;
+
+          // Read with the snapshot taken before delayed_prepared_ cleanup
+          ReadOptions roptions;
+          roptions.snapshot = snap.load();
+          ASSERT_NE(nullptr, roptions.snapshot);
+          PinnableSlice value2;
+          auto s = db->Get(roptions, db->DefaultColumnFamily(), "key", &value2);
+          ASSERT_OK(s);
+          // It should see its own write
+          ASSERT_TRUE(val_str == value2);
+          // The value read by snapshot should not change
+          ASSERT_STREQ(value2.ToString().c_str(), value.ToString().c_str());
+
+          db->ReleaseSnapshot(roptions.snapshot);
+          snap.store(nullptr);
+        }
+      });
+      write_thread.join();
+      eviction_thread.join();
+    }
+    rocksdb::SyncPoint::GetInstance()->DisableProcessing();
+    rocksdb::SyncPoint::GetInstance()->ClearAllCallBacks();
+  }
 }
 
 // Test that updating the commit map will not affect the existing snapshots

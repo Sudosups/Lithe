@@ -13,6 +13,7 @@ set(JNI_NATIVE_SOURCES
         rocksjni/compaction_filter_factory_jnicallback.cc
         rocksjni/compaction_options_fifo.cc
         rocksjni/compaction_options_universal.cc
+        rocksjni/compact_range_options.cc
         rocksjni/comparator.cc
         rocksjni/comparatorjnicallback.cc
         rocksjni/compression_options.cc
@@ -24,6 +25,7 @@ set(JNI_NATIVE_SOURCES
         rocksjni/jnicallback.cc
         rocksjni/loggerjnicallback.cc
         rocksjni/lru_cache.cc
+        rocksjni/memory_util.cc
         rocksjni/memtablejni.cc
         rocksjni/merge_operator.cc
         rocksjni/native_comparator_wrapper_test.cc
@@ -56,6 +58,7 @@ set(JNI_NATIVE_SOURCES
         rocksjni/writebatchhandlerjnicallback.cc
         rocksjni/write_batch_test.cc
         rocksjni/write_batch_with_index.cc
+        rocksjni/write_buffer_manager.cc
 )
 
 set(NATIVE_JAVA_CLASSES
@@ -79,6 +82,7 @@ set(NATIVE_JAVA_CLASSES
         org.rocksdb.ColumnFamilyOptions
         org.rocksdb.CompactionOptionsFIFO
         org.rocksdb.CompactionOptionsUniversal
+        org.rocksdb.CompactRangeOptions
         org.rocksdb.Comparator
         org.rocksdb.ComparatorOptions
         org.rocksdb.CompressionOptions
@@ -94,6 +98,7 @@ set(NATIVE_JAVA_CLASSES
         org.rocksdb.IngestExternalFileOptions
         org.rocksdb.Logger
         org.rocksdb.LRUCache
+        org.rocksdb.MemoryUtil
         org.rocksdb.MemTableConfig
         org.rocksdb.NativeComparatorWrapper
         org.rocksdb.NativeLibraryLoader
@@ -128,6 +133,7 @@ set(NATIVE_JAVA_CLASSES
         org.rocksdb.TransactionLogIterator
         org.rocksdb.TransactionOptions
         org.rocksdb.TtlDB
+        org.rocksdb.UInt64AddOperator
         org.rocksdb.VectorMemTableConfig
         org.rocksdb.WBWIRocksIterator
         org.rocksdb.WriteBatch
@@ -140,6 +146,7 @@ set(NATIVE_JAVA_CLASSES
         org.rocksdb.SnapshotTest
         org.rocksdb.WriteBatchTest
         org.rocksdb.WriteBatchTestInternalHelper
+        org.rocksdb.WriteBufferManager
 )
 
 include(FindJava)
@@ -192,6 +199,7 @@ add_jar(
   src/main/java/org/rocksdb/CompactionOptionsFIFO.java
   src/main/java/org/rocksdb/CompactionOptionsUniversal.java
   src/main/java/org/rocksdb/CompactionPriority.java
+  src/main/java/org/rocksdb/CompactRangeOptions.java
   src/main/java/org/rocksdb/CompactionStopStyle.java
   src/main/java/org/rocksdb/CompactionStyle.java
   src/main/java/org/rocksdb/Comparator.java
@@ -219,6 +227,8 @@ add_jar(
   src/main/java/org/rocksdb/IngestExternalFileOptions.java
   src/main/java/org/rocksdb/Logger.java
   src/main/java/org/rocksdb/LRUCache.java
+  src/main/java/org/rocksdb/MemoryUsageType.java
+  src/main/java/org/rocksdb/MemoryUtil.java
   src/main/java/org/rocksdb/MemTableConfig.java
   src/main/java/org/rocksdb/MergeOperator.java
   src/main/java/org/rocksdb/MutableColumnFamilyOptionsInterface.java
@@ -275,6 +285,7 @@ add_jar(
   src/main/java/org/rocksdb/WriteBatch.java
   src/main/java/org/rocksdb/WriteBatchWithIndex.java
   src/main/java/org/rocksdb/WriteOptions.java
+  src/main/java/org/rocksdb/WriteBufferManager.java
   src/main/java/org/rocksdb/util/BytewiseComparator.java
   src/main/java/org/rocksdb/util/DirectBytewiseComparator.java
   src/main/java/org/rocksdb/util/Environment.java
@@ -287,6 +298,7 @@ add_jar(
   src/test/java/org/rocksdb/RocksDBExceptionTest.java
   src/test/java/org/rocksdb/RocksMemoryResource.java
   src/test/java/org/rocksdb/SnapshotTest.java
+  src/main/java/org/rocksdb/UInt64AddOperator.java
   src/test/java/org/rocksdb/WriteBatchTest.java
   src/test/java/org/rocksdb/util/CapturingWriteBatchHandler.java
   src/test/java/org/rocksdb/util/WriteBatchGetter.java
