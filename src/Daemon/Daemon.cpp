@@ -1,6 +1,7 @@
 // Copyright (c) 2012-2017, The CryptoNote developers, The Bytecoin developers
 // Copyright (c) 2018, The TurtleCoin Developers
 // Copyright (c) 2018, The Karai Developers
+// Copyright (c) 2019, The Lithe Project
 //
 // Please see the included LICENSE file for more information.
 
@@ -202,7 +203,7 @@ int main(int argc, char* argv[])
     // configure logging
     logManager->configure(buildLoggerConfiguration(cfgLogLevel, cfgLogFile));
 
-    logger(INFO, BRIGHT_GREEN) << getProjectCLIHeader() << std::endl;
+    logger(INFO, BRIGHT_MAGENTA) << getProjectCLIHeader() << std::endl;
 
     logger(INFO) << "Program Working Directory: " << argv[0];
 

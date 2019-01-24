@@ -1668,7 +1668,7 @@ bool Core::getBlockTemplate(BlockTemplate& b, const AccountPublicAddress& adr, c
           continue;
         }
 
-        logger(Logging::DEBUGGING, Logging::BRIGHT_GREEN)
+        logger(Logging::DEBUGGING, Logging::BRIGHT_MAGENTA)
             << "Setting extra for block: " << b.baseTransaction.extra.size() << ", try_count=" << tryCount;
       }
     }
