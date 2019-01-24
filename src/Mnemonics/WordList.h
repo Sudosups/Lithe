@@ -1,6 +1,7 @@
 //
 // Copyright 2014-2018 The Monero Developers
 // Copyright 2018 The TurtleCoin Developers
+// Copyright 2019 The Lithe Project
 //
 // Please see the included LICENSE file for more information.
 
@@ -8,7 +9,7 @@ namespace Mnemonics
 {
     namespace WordList
     {
-        const std::vector<std::string> English =
+        const static std::vector<const char *> English =
         {
             "abbey",
             "abducts",
