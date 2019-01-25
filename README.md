@@ -9,6 +9,7 @@ LITHE aims to study the best practices of the fiat world and work towards develo
 
 With the beauty of Open Software, you can build LITHE for yourself if you find it easier than running binaires. We have a variaty of instructions so you're not short on how to do things for yourself.  
 Codebase
+
 | Platform | Description | 
 |----------|-------------|
 | Linux    | [Ubuntu - GCC](https://github.com/Lithe-Project/Lithe/wiki/Build-Instructions#ubuntu-using-gcc) |
@@ -17,7 +18,6 @@ Codebase
 | MacOS    | [OSX/Apple - GCC](https://github.com/Lithe-Project/Lithe/wiki/Build-Instructions#osxapple-using-gcc) |
 | Windows  | [Windows - Visual Studio](https://github.com/Lithe-Project/Lithe/wiki/Build-Instructions#windows) |
 | ARM      | [RaspberryPi 3 - x64](https://github.com/Lithe-Project/Lithe/wiki/Build-Instructions#raspberry-pi-3-b-aarch64arm64) |
-
 
 ### Links
 
