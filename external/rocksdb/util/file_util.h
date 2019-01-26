@@ -19,7 +19,7 @@ extern Status CopyFile(Env* env, const std::string& source,
                        bool use_fsync);
 
 extern Status CreateFile(Env* env, const std::string& destination,
-                         const std::string& contents, bool use_fsync);
+                         const std::string& contents);
 
 extern Status DeleteSSTFile(const ImmutableDBOptions* db_options,
                             const std::string& fname,

@@ -17,14 +17,13 @@
 #include "rocksdb/env.h"
 #include "table/block.h"
 #include "table/block_based_table_reader.h"
-#include "table/format.h"
 #include "table/persistent_cache_helper.h"
+#include "table/format.h"
 #include "util/coding.h"
 #include "util/compression.h"
 #include "util/crc32c.h"
 #include "util/file_reader_writer.h"
 #include "util/logging.h"
-#include "util/memory_allocator.h"
 #include "util/stop_watch.h"
 #include "util/string_util.h"
 #include "util/xxhash.h"
@@ -48,12 +47,6 @@ void BlockFetcher::CheckBlockChecksum() {
         break;
       case kxxHash:
         actual = XXH32(data, static_cast<int>(block_size_) + 1, 0);
-        break;
-      case kxxHash64:
-        actual =static_cast<uint32_t> (
-             XXH64(data, static_cast<int>(block_size_) + 1, 0) &
-              uint64_t{0xffffffff}
-          );
         break;
       default:
         status_ = Status::Corruption(
@@ -114,11 +107,9 @@ bool BlockFetcher::TryGetCompressedBlockFromPersistentCache() {
   if (cache_options_.persistent_cache &&
       cache_options_.persistent_cache->IsCompressed()) {
     // lookup uncompressed cache mode p-cache
-    std::unique_ptr<char[]> raw_data;
     status_ = PersistentCacheHelper::LookupRawPage(
-        cache_options_, handle_, &raw_data, block_size_ + kBlockTrailerSize);
+        cache_options_, handle_, &heap_buf_, block_size_ + kBlockTrailerSize);
     if (status_.ok()) {
-      heap_buf_ = CacheAllocationPtr(raw_data.release());
       used_buf_ = heap_buf_.get();
       slice_ = Slice(heap_buf_.get(), block_size_);
       return true;
@@ -140,13 +131,8 @@ void BlockFetcher::PrepareBufferForBlockFromFile() {
     // If we've got a small enough hunk of data, read it in to the
     // trivially allocated stack buffer instead of needing a full malloc()
     used_buf_ = &stack_buf_[0];
-  } else if (maybe_compressed_ && !do_uncompress_) {
-    compressed_buf_ = AllocateBlock(block_size_ + kBlockTrailerSize,
-                                    memory_allocator_compressed_);
-    used_buf_ = compressed_buf_.get();
   } else {
-    heap_buf_ =
-        AllocateBlock(block_size_ + kBlockTrailerSize, memory_allocator_);
+    heap_buf_.reset(new char[block_size_ + kBlockTrailerSize]);
     used_buf_ = heap_buf_.get();
   }
 }
@@ -173,45 +159,28 @@ void BlockFetcher::InsertUncompressedBlockToPersistentCacheIfNeeded() {
   }
 }
 
-inline void BlockFetcher::CopyBufferToHeap() {
-  assert(used_buf_ != heap_buf_.get());
-  heap_buf_ = AllocateBlock(block_size_ + kBlockTrailerSize, memory_allocator_);
-  memcpy(heap_buf_.get(), used_buf_, block_size_ + kBlockTrailerSize);
-}
-
 inline
 void BlockFetcher::GetBlockContents() {
   if (slice_.data() != used_buf_) {
     // the slice content is not the buffer provided
-    *contents_ = BlockContents(Slice(slice_.data(), block_size_));
+    *contents_ = BlockContents(Slice(slice_.data(), block_size_),
+                               immortal_source_, compression_type);
   } else {
     // page can be either uncompressed or compressed, the buffer either stack
     // or heap provided. Refer to https://github.com/facebook/rocksdb/pull/4096
     if (got_from_prefetch_buffer_ || used_buf_ == &stack_buf_[0]) {
-      CopyBufferToHeap();
-    } else if (used_buf_ == compressed_buf_.get()) {
-      if (compression_type_ == kNoCompression &&
-          memory_allocator_ != memory_allocator_compressed_) {
-        CopyBufferToHeap();
-      } else {
-        heap_buf_ = std::move(compressed_buf_);
-      }
+      heap_buf_.reset(new char[block_size_ + kBlockTrailerSize]);
+      memcpy(heap_buf_.get(), used_buf_, block_size_ + kBlockTrailerSize);
     }
-    *contents_ = BlockContents(std::move(heap_buf_), block_size_);
+    *contents_ = BlockContents(std::move(heap_buf_), block_size_, true,
+                               compression_type);
   }
-#ifndef NDEBUG
-  contents_->is_raw_block = true;
-#endif
 }
 
 Status BlockFetcher::ReadBlockContents() {
   block_size_ = static_cast<size_t>(handle_.size());
 
   if (TryGetUncompressBlockFromPersistentCache()) {
-    compression_type_ = kNoCompression;
-#ifndef NDEBUG
-    contents_->is_raw_block = true;
-#endif  // NDEBUG
     return Status::OK();
   }
   if (TryGetFromPrefetchBuffer()) {
@@ -252,16 +221,15 @@ Status BlockFetcher::ReadBlockContents() {
 
   PERF_TIMER_GUARD(block_decompress_time);
 
-  compression_type_ = get_block_compression_type(slice_.data(), block_size_);
+  compression_type =
+      static_cast<rocksdb::CompressionType>(slice_.data()[block_size_]);
 
-  if (do_uncompress_ && compression_type_ != kNoCompression) {
+  if (do_uncompress_ && compression_type != kNoCompression) {
     // compressed page, uncompress, update cache
-    UncompressionContext context(compression_type_);
-    UncompressionInfo info(context, uncompression_dict_, compression_type_);
-    status_ = UncompressBlockContents(info, slice_.data(), block_size_,
-                                      contents_, footer_.version(), ioptions_,
-                                      memory_allocator_);
-    compression_type_ = kNoCompression;
+    UncompressionContext uncompression_ctx(compression_type, compression_dict_);
+    status_ =
+        UncompressBlockContents(uncompression_ctx, slice_.data(), block_size_,
+                                contents_, footer_.version(), ioptions_);
   } else {
     GetBlockContents();
   }

@@ -77,8 +77,8 @@ class DBImplReadOnly : public DBImpl {
       ColumnFamilyHandle* /*column_family*/,
       const std::vector<std::string>& /*input_file_names*/,
       const int /*output_level*/, const int /*output_path_id*/ = -1,
-      std::vector<std::string>* const /*output_file_names*/ = nullptr,
-      CompactionJobInfo* /*compaction_job_info*/ = nullptr) override {
+      std::vector<std::string>* const /*output_file_names*/ = nullptr
+      ) override {
     return Status::NotSupported("Not supported operation in read only mode.");
   }
 
@@ -89,11 +89,10 @@ class DBImplReadOnly : public DBImpl {
   virtual Status EnableFileDeletions(bool /*force*/) override {
     return Status::NotSupported("Not supported operation in read only mode.");
   }
-  virtual Status GetLiveFiles(std::vector<std::string>& ret,
-                              uint64_t* manifest_file_size,
-                              bool /*flush_memtable*/) override {
-    return DBImpl::GetLiveFiles(ret, manifest_file_size,
-                                false /* flush_memtable */);
+  virtual Status GetLiveFiles(std::vector<std::string>&,
+                              uint64_t* /*manifest_file_size*/,
+                              bool /*flush_memtable*/ = true) override {
+    return Status::NotSupported("Not supported operation in read only mode.");
   }
 
   using DBImpl::Flush;

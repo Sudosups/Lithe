@@ -17,7 +17,9 @@ SyncPoint* SyncPoint::GetInstance() {
   return &sync_point;
 }
 
-SyncPoint::SyncPoint() : impl_(new Data) {}
+SyncPoint::SyncPoint() : 
+  impl_(new Data) {
+}
 
 SyncPoint:: ~SyncPoint() {
   delete impl_;

@@ -38,7 +38,6 @@ class IndexBuilder {
       BlockBasedTableOptions::IndexType index_type,
       const rocksdb::InternalKeyComparator* comparator,
       const InternalKeySliceTransform* int_key_slice_transform,
-      const bool use_value_delta_encoding,
       const BlockBasedTableOptions& table_opt);
 
   // Index builder will construct a set of blocks which contain:
@@ -120,16 +119,11 @@ class IndexBuilder {
 class ShortenedIndexBuilder : public IndexBuilder {
  public:
   explicit ShortenedIndexBuilder(const InternalKeyComparator* comparator,
-                                 const int index_block_restart_interval,
-                                 const uint32_t format_version,
-                                 const bool use_value_delta_encoding)
+                                 int index_block_restart_interval,
+                                 uint32_t format_version)
       : IndexBuilder(comparator),
-        index_block_builder_(index_block_restart_interval,
-                             true /*use_delta_encoding*/,
-                             use_value_delta_encoding),
-        index_block_builder_without_seq_(index_block_restart_interval,
-                                         true /*use_delta_encoding*/,
-                                         use_value_delta_encoding) {
+        index_block_builder_(index_block_restart_interval),
+        index_block_builder_without_seq_(index_block_restart_interval) {
     // Making the default true will disable the feature for old versions
     seperator_is_key_plus_seq_ = (format_version <= 2);
   }
@@ -153,17 +147,10 @@ class ShortenedIndexBuilder : public IndexBuilder {
 
     std::string handle_encoding;
     block_handle.EncodeTo(&handle_encoding);
-    std::string handle_delta_encoding;
-    PutVarsignedint64(&handle_delta_encoding,
-                      block_handle.size() - last_encoded_handle_.size());
-    assert(handle_delta_encoding.size() != 0);
-    last_encoded_handle_ = block_handle;
-    const Slice handle_delta_encoding_slice(handle_delta_encoding);
-    index_block_builder_.Add(sep, handle_encoding,
-                             &handle_delta_encoding_slice);
+    index_block_builder_.Add(sep, handle_encoding);
     if (!seperator_is_key_plus_seq_) {
-      index_block_builder_without_seq_.Add(ExtractUserKey(sep), handle_encoding,
-                                           &handle_delta_encoding_slice);
+      index_block_builder_without_seq_.Add(ExtractUserKey(sep),
+                                           handle_encoding);
     }
   }
 
@@ -181,7 +168,9 @@ class ShortenedIndexBuilder : public IndexBuilder {
     return Status::OK();
   }
 
-  virtual size_t IndexSize() const override { return index_size_; }
+  virtual size_t IndexSize() const override {
+    return index_size_;
+  }
 
   virtual bool seperator_is_key_plus_seq() override {
     return seperator_is_key_plus_seq_;
@@ -193,7 +182,6 @@ class ShortenedIndexBuilder : public IndexBuilder {
   BlockBuilder index_block_builder_;
   BlockBuilder index_block_builder_without_seq_;
   bool seperator_is_key_plus_seq_;
-  BlockHandle last_encoded_handle_;
 };
 
 // HashIndexBuilder contains a binary-searchable primary index and the
@@ -228,10 +216,10 @@ class HashIndexBuilder : public IndexBuilder {
   explicit HashIndexBuilder(const InternalKeyComparator* comparator,
                             const SliceTransform* hash_key_extractor,
                             int index_block_restart_interval,
-                            int format_version, bool use_value_delta_encoding)
+                            int format_version)
       : IndexBuilder(comparator),
         primary_index_builder_(comparator, index_block_restart_interval,
-                               format_version, use_value_delta_encoding),
+                               format_version),
         hash_key_extractor_(hash_key_extractor) {}
 
   virtual void AddIndexEntry(std::string* last_key_in_current_block,
@@ -334,12 +322,10 @@ class PartitionedIndexBuilder : public IndexBuilder {
  public:
   static PartitionedIndexBuilder* CreateIndexBuilder(
       const rocksdb::InternalKeyComparator* comparator,
-      const bool use_value_delta_encoding,
       const BlockBasedTableOptions& table_opt);
 
   explicit PartitionedIndexBuilder(const InternalKeyComparator* comparator,
-                                   const BlockBasedTableOptions& table_opt,
-                                   const bool use_value_delta_encoding);
+                                   const BlockBasedTableOptions& table_opt);
 
   virtual ~PartitionedIndexBuilder();
 
@@ -351,8 +337,12 @@ class PartitionedIndexBuilder : public IndexBuilder {
       IndexBlocks* index_blocks,
       const BlockHandle& last_partition_block_handle) override;
 
-  virtual size_t IndexSize() const override { return index_size_; }
-  size_t TopLevelIndexSize(uint64_t) const { return top_level_index_size_; }
+  virtual size_t IndexSize() const override {
+    return index_size_;
+  }
+  size_t TopLevelIndexSize(uint64_t) const {
+    return top_level_index_size_;
+  }
   size_t NumPartitions() const;
 
   inline bool ShouldCutFilterBlock() {
@@ -373,8 +363,6 @@ class PartitionedIndexBuilder : public IndexBuilder {
   virtual bool seperator_is_key_plus_seq() override {
     return seperator_is_key_plus_seq_;
   }
-
-  bool get_use_value_delta_encoding() { return use_value_delta_encoding_; }
 
  private:
   // Set after ::Finish is called
@@ -400,12 +388,10 @@ class PartitionedIndexBuilder : public IndexBuilder {
   bool finishing_indexes = false;
   const BlockBasedTableOptions& table_opt_;
   bool seperator_is_key_plus_seq_;
-  bool use_value_delta_encoding_;
   // true if an external entity (such as filter partition builder) request
   // cutting the next partition
   bool partition_cut_requested_ = true;
   // true if it should cut the next filter partition block
   bool cut_filter_block = false;
-  BlockHandle last_encoded_handle_;
 };
 }  // namespace rocksdb

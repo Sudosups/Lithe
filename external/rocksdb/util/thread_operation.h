@@ -70,7 +70,7 @@ static OperationStageInfo global_op_stage_table[] = {
   {ThreadStatus::STAGE_MEMTABLE_ROLLBACK,
       "MemTableList::RollbackMemtableFlush"},
   {ThreadStatus::STAGE_MEMTABLE_INSTALL_FLUSH_RESULTS,
-      "MemTableList::TryInstallMemtableFlushResults"},
+      "MemTableList::InstallMemtableFlushResults"},
 };
 
 // The structure that describes a state.

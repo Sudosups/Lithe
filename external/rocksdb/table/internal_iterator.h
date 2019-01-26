@@ -10,17 +10,15 @@
 #include "rocksdb/comparator.h"
 #include "rocksdb/iterator.h"
 #include "rocksdb/status.h"
-#include "table/format.h"
 
 namespace rocksdb {
 
 class PinnedIteratorsManager;
 
-template <class TValue>
-class InternalIteratorBase : public Cleanable {
+class InternalIterator : public Cleanable {
  public:
-  InternalIteratorBase() {}
-  virtual ~InternalIteratorBase() {}
+  InternalIterator() {}
+  virtual ~InternalIterator() {}
 
   // An iterator is either positioned at a key/value pair, or
   // not valid.  This method returns true iff the iterator is valid.
@@ -68,7 +66,7 @@ class InternalIteratorBase : public Cleanable {
   // the returned slice is valid only until the next modification of
   // the iterator.
   // REQUIRES: Valid()
-  virtual TValue value() const = 0;
+  virtual Slice value() const = 0;
 
   // If an error has occurred, return it.  Else return an ok status.
   // If non-blocking IO is requested and this operation cannot be
@@ -119,24 +117,14 @@ class InternalIteratorBase : public Cleanable {
 
  private:
   // No copying allowed
-  InternalIteratorBase(const InternalIteratorBase&) = delete;
-  InternalIteratorBase& operator=(const InternalIteratorBase&) = delete;
+  InternalIterator(const InternalIterator&) = delete;
+  InternalIterator& operator=(const InternalIterator&) = delete;
 };
 
-using InternalIterator = InternalIteratorBase<Slice>;
-
 // Return an empty iterator (yields nothing).
-template <class TValue = Slice>
-extern InternalIteratorBase<TValue>* NewEmptyInternalIterator();
+extern InternalIterator* NewEmptyInternalIterator();
 
 // Return an empty iterator with the specified status.
-template <class TValue = Slice>
-extern InternalIteratorBase<TValue>* NewErrorInternalIterator(
-    const Status& status);
-
-// Return an empty iterator with the specified status, allocated arena.
-template <class TValue = Slice>
-extern InternalIteratorBase<TValue>* NewErrorInternalIterator(
-    const Status& status, Arena* arena);
+extern InternalIterator* NewErrorInternalIterator(const Status& status);
 
 }  // namespace rocksdb

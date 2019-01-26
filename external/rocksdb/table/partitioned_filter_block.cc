@@ -26,17 +26,12 @@ namespace rocksdb {
 PartitionedFilterBlockBuilder::PartitionedFilterBlockBuilder(
     const SliceTransform* prefix_extractor, bool whole_key_filtering,
     FilterBitsBuilder* filter_bits_builder, int index_block_restart_interval,
-    const bool use_value_delta_encoding,
     PartitionedIndexBuilder* const p_index_builder,
     const uint32_t partition_size)
     : FullFilterBlockBuilder(prefix_extractor, whole_key_filtering,
                              filter_bits_builder),
-      index_on_filter_block_builder_(index_block_restart_interval,
-                                     true /*use_delta_encoding*/,
-                                     use_value_delta_encoding),
-      index_on_filter_block_builder_without_seq_(index_block_restart_interval,
-                                                 true /*use_delta_encoding*/,
-                                                 use_value_delta_encoding),
+      index_on_filter_block_builder_(index_block_restart_interval),
+      index_on_filter_block_builder_without_seq_(index_block_restart_interval),
       p_index_builder_(p_index_builder),
       filters_in_partition_(0),
       num_added_(0) {
@@ -78,18 +73,10 @@ Slice PartitionedFilterBlockBuilder::Finish(
     FilterEntry& last_entry = filters.front();
     std::string handle_encoding;
     last_partition_block_handle.EncodeTo(&handle_encoding);
-    std::string handle_delta_encoding;
-    PutVarsignedint64(
-        &handle_delta_encoding,
-        last_partition_block_handle.size() - last_encoded_handle_.size());
-    last_encoded_handle_ = last_partition_block_handle;
-    const Slice handle_delta_encoding_slice(handle_delta_encoding);
-    index_on_filter_block_builder_.Add(last_entry.key, handle_encoding,
-                                       &handle_delta_encoding_slice);
+    index_on_filter_block_builder_.Add(last_entry.key, handle_encoding);
     if (!p_index_builder_->seperator_is_key_plus_seq()) {
       index_on_filter_block_builder_without_seq_.Add(
-          ExtractUserKey(last_entry.key), handle_encoding,
-          &handle_delta_encoding_slice);
+          ExtractUserKey(last_entry.key), handle_encoding);
     }
     filters.pop_front();
   } else {
@@ -122,14 +109,12 @@ PartitionedFilterBlockReader::PartitionedFilterBlockReader(
     const SliceTransform* prefix_extractor, bool _whole_key_filtering,
     BlockContents&& contents, FilterBitsReader* /*filter_bits_reader*/,
     Statistics* stats, const InternalKeyComparator comparator,
-    const BlockBasedTable* table, const bool index_key_includes_seq,
-    const bool index_value_is_full)
+    const BlockBasedTable* table, const bool index_key_includes_seq)
     : FilterBlockReader(contents.data.size(), stats, _whole_key_filtering),
       prefix_extractor_(prefix_extractor),
       comparator_(comparator),
       table_(table),
-      index_key_includes_seq_(index_key_includes_seq),
-      index_value_is_full_(index_value_is_full) {
+      index_key_includes_seq_(index_key_includes_seq) {
   idx_on_fltr_blk_.reset(new Block(std::move(contents),
                                    kDisableGlobalSequenceNumber,
                                    0 /* read_amp_bytes_per_bit */, stats));
@@ -149,10 +134,15 @@ PartitionedFilterBlockReader::~PartitionedFilterBlockReader() {
   Statistics* kNullStats = nullptr;
   idx_on_fltr_blk_->NewIterator<IndexBlockIter>(
       &comparator_, comparator_.user_comparator(), &biter, kNullStats, true,
-      index_key_includes_seq_, index_value_is_full_);
+      index_key_includes_seq_);
   biter.SeekToFirst();
   for (; biter.Valid(); biter.Next()) {
-    handle = biter.value();
+    auto input = biter.value();
+    auto s = handle.DecodeFrom(&input);
+    assert(s.ok());
+    if (!s.ok()) {
+      continue;
+    }
     auto key = BlockBasedTable::GetCacheKey(table_->rep_->cache_key_prefix,
                                             table_->rep_->cache_key_prefix_size,
                                             handle, cache_key);
@@ -178,7 +168,7 @@ bool PartitionedFilterBlockReader::KeyMayMatch(
   }
   bool cached = false;
   auto filter_partition =
-      GetFilterPartition(nullptr /* prefetch_buffer */, filter_handle, no_io,
+      GetFilterPartition(nullptr /* prefetch_buffer */, &filter_handle, no_io,
                          &cached, prefix_extractor);
   if (UNLIKELY(!filter_partition.value)) {
     return true;
@@ -217,7 +207,7 @@ bool PartitionedFilterBlockReader::PrefixMayMatch(
   }
   bool cached = false;
   auto filter_partition =
-      GetFilterPartition(nullptr /* prefetch_buffer */, filter_handle, no_io,
+      GetFilterPartition(nullptr /* prefetch_buffer */, &filter_handle, no_io,
                          &cached, prefix_extractor);
   if (UNLIKELY(!filter_partition.value)) {
     return true;
@@ -235,26 +225,29 @@ bool PartitionedFilterBlockReader::PrefixMayMatch(
   return res;
 }
 
-BlockHandle PartitionedFilterBlockReader::GetFilterPartitionHandle(
+Slice PartitionedFilterBlockReader::GetFilterPartitionHandle(
     const Slice& entry) {
   IndexBlockIter iter;
   Statistics* kNullStats = nullptr;
   idx_on_fltr_blk_->NewIterator<IndexBlockIter>(
       &comparator_, comparator_.user_comparator(), &iter, kNullStats, true,
-      index_key_includes_seq_, index_value_is_full_);
+      index_key_includes_seq_);
   iter.Seek(entry);
   if (UNLIKELY(!iter.Valid())) {
-    return BlockHandle(0, 0);
+    return Slice();
   }
   assert(iter.Valid());
-  BlockHandle fltr_blk_handle = iter.value();
-  return fltr_blk_handle;
+  Slice handle_value = iter.value();
+  return handle_value;
 }
 
 BlockBasedTable::CachableEntry<FilterBlockReader>
 PartitionedFilterBlockReader::GetFilterPartition(
-    FilePrefetchBuffer* prefetch_buffer, BlockHandle& fltr_blk_handle,
-    const bool no_io, bool* cached, const SliceTransform* prefix_extractor) {
+    FilePrefetchBuffer* prefetch_buffer, Slice* handle_value, const bool no_io,
+    bool* cached, const SliceTransform* prefix_extractor) {
+  BlockHandle fltr_blk_handle;
+  auto s = fltr_blk_handle.DecodeFrom(handle_value);
+  assert(s.ok());
   const bool is_a_filter_partition = true;
   auto block_cache = table_->rep_->table_options.block_cache.get();
   if (LIKELY(block_cache != nullptr)) {
@@ -306,25 +299,39 @@ void PartitionedFilterBlockReader::CacheDependencies(
   // Before read partitions, prefetch them to avoid lots of IOs
   auto rep = table_->rep_;
   IndexBlockIter biter;
+  BlockHandle handle;
   Statistics* kNullStats = nullptr;
   idx_on_fltr_blk_->NewIterator<IndexBlockIter>(
       &comparator_, comparator_.user_comparator(), &biter, kNullStats, true,
-      index_key_includes_seq_, index_value_is_full_);
+      index_key_includes_seq_);
   // Index partitions are assumed to be consecuitive. Prefetch them all.
   // Read the first block offset
   biter.SeekToFirst();
-  BlockHandle handle = biter.value();
+  Slice input = biter.value();
+  Status s = handle.DecodeFrom(&input);
+  assert(s.ok());
+  if (!s.ok()) {
+    ROCKS_LOG_WARN(rep->ioptions.info_log,
+                   "Could not read first index partition");
+    return;
+  }
   uint64_t prefetch_off = handle.offset();
 
   // Read the last block's offset
   biter.SeekToLast();
-  handle = biter.value();
+  input = biter.value();
+  s = handle.DecodeFrom(&input);
+  assert(s.ok());
+  if (!s.ok()) {
+    ROCKS_LOG_WARN(rep->ioptions.info_log,
+                   "Could not read last index partition");
+    return;
+  }
   uint64_t last_off = handle.offset() + handle.size() + kBlockTrailerSize;
   uint64_t prefetch_len = last_off - prefetch_off;
   std::unique_ptr<FilePrefetchBuffer> prefetch_buffer;
   auto& file = table_->rep_->file;
   prefetch_buffer.reset(new FilePrefetchBuffer());
-  Status s;
   s = prefetch_buffer->Prefetch(file.get(), prefetch_off,
     static_cast<size_t>(prefetch_len));
 
@@ -332,7 +339,14 @@ void PartitionedFilterBlockReader::CacheDependencies(
   biter.SeekToFirst();
   Cache* block_cache = rep->table_options.block_cache.get();
   for (; biter.Valid(); biter.Next()) {
-    handle = biter.value();
+    input = biter.value();
+    s = handle.DecodeFrom(&input);
+    assert(s.ok());
+    if (!s.ok()) {
+      ROCKS_LOG_WARN(rep->ioptions.info_log, "Could not read index partition");
+      continue;
+    }
+
     const bool no_io = true;
     const bool is_a_filter_partition = true;
     auto filter = table_->GetFilter(

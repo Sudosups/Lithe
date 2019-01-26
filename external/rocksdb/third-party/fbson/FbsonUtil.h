@@ -9,7 +9,8 @@
  * @author Tian Xia <tianx@fb.com>
  */
 
-#pragma once
+#ifndef FBSON_FBSONUTIL_H
+#define FBSON_FBSONUTIL_H
 
 #include <sstream>
 #include "FbsonDocument.h"
@@ -158,3 +159,5 @@ class FbsonToJson {
 };
 
 } // namespace fbson
+
+#endif // FBSON_FBSONUTIL_H

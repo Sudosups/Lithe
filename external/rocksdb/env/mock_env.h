@@ -28,28 +28,28 @@ class MockEnv : public EnvWrapper {
 
   // Partial implementation of the Env interface.
   virtual Status NewSequentialFile(const std::string& fname,
-                                   std::unique_ptr<SequentialFile>* result,
+                                   unique_ptr<SequentialFile>* result,
                                    const EnvOptions& soptions) override;
 
   virtual Status NewRandomAccessFile(const std::string& fname,
-                                     std::unique_ptr<RandomAccessFile>* result,
+                                     unique_ptr<RandomAccessFile>* result,
                                      const EnvOptions& soptions) override;
 
   virtual Status NewRandomRWFile(const std::string& fname,
-                                 std::unique_ptr<RandomRWFile>* result,
+                                 unique_ptr<RandomRWFile>* result,
                                  const EnvOptions& options) override;
 
   virtual Status ReuseWritableFile(const std::string& fname,
                                    const std::string& old_fname,
-                                   std::unique_ptr<WritableFile>* result,
+                                   unique_ptr<WritableFile>* result,
                                    const EnvOptions& options) override;
 
   virtual Status NewWritableFile(const std::string& fname,
-                                 std::unique_ptr<WritableFile>* result,
+                                 unique_ptr<WritableFile>* result,
                                  const EnvOptions& env_options) override;
 
   virtual Status NewDirectory(const std::string& name,
-                              std::unique_ptr<Directory>* result) override;
+                              unique_ptr<Directory>* result) override;
 
   virtual Status FileExists(const std::string& fname) override;
 
@@ -81,7 +81,7 @@ class MockEnv : public EnvWrapper {
                           const std::string& target) override;
 
   virtual Status NewLogger(const std::string& fname,
-                           std::shared_ptr<Logger>* result) override;
+                           shared_ptr<Logger>* result) override;
 
   virtual Status LockFile(const std::string& fname, FileLock** flock) override;
 

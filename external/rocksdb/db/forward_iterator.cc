@@ -15,8 +15,6 @@
 #include "db/db_iter.h"
 #include "db/dbformat.h"
 #include "db/job_context.h"
-#include "db/range_del_aggregator.h"
-#include "db/range_tombstone_fragmenter.h"
 #include "rocksdb/env.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/slice_transform.h"
@@ -73,8 +71,8 @@ class ForwardLevelIterator : public InternalIterator {
       delete file_iter_;
     }
 
-    ReadRangeDelAggregator range_del_agg(&cfd_->internal_comparator(),
-                                         kMaxSequenceNumber /* upper_bound */);
+    RangeDelAggregator range_del_agg(
+        cfd_->internal_comparator(), {} /* snapshots */);
     file_iter_ = cfd_->table_cache()->NewIterator(
         read_options_, *(cfd_->soptions()), cfd_->internal_comparator(),
         *files_[file_index_],
@@ -610,14 +608,13 @@ void ForwardIterator::RebuildIterators(bool refresh_sv) {
     // New
     sv_ = cfd_->GetReferencedSuperVersion(&(db_->mutex_));
   }
-  ReadRangeDelAggregator range_del_agg(&cfd_->internal_comparator(),
-                                       kMaxSequenceNumber /* upper_bound */);
+  RangeDelAggregator range_del_agg(
+      cfd_->internal_comparator(), {} /* snapshots */);
   mutable_iter_ = sv_->mem->NewIterator(read_options_, &arena_);
   sv_->imm->AddIterators(read_options_, &imm_iters_, &arena_);
   if (!read_options_.ignore_range_deletions) {
-    std::unique_ptr<FragmentedRangeTombstoneIterator> range_del_iter(
-        sv_->mem->NewRangeTombstoneIterator(
-            read_options_, sv_->current->version_set()->LastSequence()));
+    std::unique_ptr<InternalIterator> range_del_iter(
+        sv_->mem->NewRangeTombstoneIterator(read_options_));
     range_del_agg.AddTombstones(std::move(range_del_iter));
     sv_->imm->AddRangeTombstoneIterators(read_options_, &arena_,
                                          &range_del_agg);
@@ -669,12 +666,11 @@ void ForwardIterator::RenewIterators() {
 
   mutable_iter_ = svnew->mem->NewIterator(read_options_, &arena_);
   svnew->imm->AddIterators(read_options_, &imm_iters_, &arena_);
-  ReadRangeDelAggregator range_del_agg(&cfd_->internal_comparator(),
-                                       kMaxSequenceNumber /* upper_bound */);
+  RangeDelAggregator range_del_agg(
+      cfd_->internal_comparator(), {} /* snapshots */);
   if (!read_options_.ignore_range_deletions) {
-    std::unique_ptr<FragmentedRangeTombstoneIterator> range_del_iter(
-        svnew->mem->NewRangeTombstoneIterator(
-            read_options_, sv_->current->version_set()->LastSequence()));
+    std::unique_ptr<InternalIterator> range_del_iter(
+        svnew->mem->NewRangeTombstoneIterator(read_options_));
     range_del_agg.AddTombstones(std::move(range_del_iter));
     svnew->imm->AddRangeTombstoneIterators(read_options_, &arena_,
                                            &range_del_agg);
@@ -920,13 +916,21 @@ bool ForwardIterator::TEST_CheckDeletedIters(int* pdeleted_iters,
 uint32_t ForwardIterator::FindFileInRange(
     const std::vector<FileMetaData*>& files, const Slice& internal_key,
     uint32_t left, uint32_t right) {
-  auto cmp = [&](const FileMetaData* f, const Slice& key) -> bool {
-    return cfd_->internal_comparator().InternalKeyComparator::Compare(
-            f->largest.Encode(), key) < 0;
-  };
-  const auto &b = files.begin();
-  return static_cast<uint32_t>(std::lower_bound(b + left,
-                                 b + right, internal_key, cmp) - b);
+  while (left < right) {
+    uint32_t mid = (left + right) / 2;
+    const FileMetaData* f = files[mid];
+    if (cfd_->internal_comparator().InternalKeyComparator::Compare(
+          f->largest.Encode(), internal_key) < 0) {
+      // Key at "mid.largest" is < "target".  Therefore all
+      // files at or before "mid" are uninteresting.
+      left = mid + 1;
+    } else {
+      // Key at "mid.largest" is >= "target".  Therefore all files
+      // after "mid" are uninteresting.
+      right = mid;
+    }
+  }
+  return right;
 }
 
 void ForwardIterator::DeleteIterator(InternalIterator* iter, bool is_arena) {

@@ -14,7 +14,6 @@ NATIVE_JAVA_CLASSES = org.rocksdb.AbstractCompactionFilter\
 	org.rocksdb.ColumnFamilyOptions\
 	org.rocksdb.CompactionOptionsFIFO\
 	org.rocksdb.CompactionOptionsUniversal\
-	org.rocksdb.CompactRangeOptions\
 	org.rocksdb.Comparator\
 	org.rocksdb.ComparatorOptions\
 	org.rocksdb.CompressionOptions\
@@ -30,8 +29,6 @@ NATIVE_JAVA_CLASSES = org.rocksdb.AbstractCompactionFilter\
 	org.rocksdb.HashSkipListMemTableConfig\
 	org.rocksdb.Logger\
 	org.rocksdb.LRUCache\
-	org.rocksdb.MemoryUsageType\
-	org.rocksdb.MemoryUtil\
 	org.rocksdb.MergeOperator\
 	org.rocksdb.NativeComparatorWrapper\
 	org.rocksdb.OptimisticTransactionDB\
@@ -62,12 +59,10 @@ NATIVE_JAVA_CLASSES = org.rocksdb.AbstractCompactionFilter\
 	org.rocksdb.VectorMemTableConfig\
 	org.rocksdb.Snapshot\
 	org.rocksdb.StringAppendOperator\
-	org.rocksdb.UInt64AddOperator\
 	org.rocksdb.WriteBatch\
 	org.rocksdb.WriteBatch.Handler\
 	org.rocksdb.WriteOptions\
 	org.rocksdb.WriteBatchWithIndex\
-	org.rocksdb.WriteBufferManager\
 	org.rocksdb.WBWIRocksIterator
 
 NATIVE_JAVA_TEST_CLASSES = org.rocksdb.RocksDBExceptionTest\
@@ -115,7 +110,6 @@ JAVA_TESTS = org.rocksdb.BackupableDBOptionsTest\
 	org.rocksdb.KeyMayExistTest\
 	org.rocksdb.LoggerTest\
 	org.rocksdb.LRUCacheTest\
-	org.rocksdb.MemoryUtilTest\
 	org.rocksdb.MemTableTest\
 	org.rocksdb.MergeTest\
 	org.rocksdb.MixedOptionsTest\

@@ -15,7 +15,7 @@ PerfContext perf_context;
 #if defined(OS_SOLARIS)
 __thread PerfContext perf_context_;
 #else
-thread_local PerfContext perf_context;
+__thread PerfContext perf_context;
 #endif
 #endif
 
@@ -31,12 +31,6 @@ PerfContext* get_perf_context() {
 #endif
 }
 
-PerfContext::~PerfContext() {
-#if !defined(NPERF_CONTEXT) && defined(ROCKSDB_SUPPORT_THREAD_LOCAL) && !defined(OS_SOLARIS)
-  ClearPerLevelPerfContext();
-#endif
-}
-
 void PerfContext::Reset() {
 #ifndef NPERF_CONTEXT
   user_key_comparison_count = 0;
@@ -44,11 +38,6 @@ void PerfContext::Reset() {
   block_read_count = 0;
   block_read_byte = 0;
   block_read_time = 0;
-  block_cache_index_hit_count = 0;
-  index_block_read_count = 0;
-  block_cache_filter_hit_count = 0;
-  filter_block_read_count = 0;
-  compression_dict_block_read_count = 0;
   block_checksum_time = 0;
   block_decompress_time = 0;
   get_read_bytes = 0;
@@ -115,12 +104,6 @@ void PerfContext::Reset() {
   env_lock_file_nanos = 0;
   env_unlock_file_nanos = 0;
   env_new_logger_nanos = 0;
-  get_cpu_nanos = 0;
-  if (per_level_perf_context_enabled && level_to_perf_context) {
-    for (auto& kv : *level_to_perf_context) {
-      kv.second.Reset();
-    }
-  }
 #endif
 }
 
@@ -128,27 +111,6 @@ void PerfContext::Reset() {
   if (!exclude_zero_counters || (counter > 0)) { \
     ss << #counter << " = " << counter << ", ";  \
   }
-
-#define PERF_CONTEXT_BY_LEVEL_OUTPUT_ONE_COUNTER(counter)         \
-  if (per_level_perf_context_enabled && \
-      level_to_perf_context) {                                    \
-    ss << #counter << " = ";                                      \
-    for (auto& kv : *level_to_perf_context) {                     \
-      if (!exclude_zero_counters || (kv.second.counter > 0)) {    \
-        ss << kv.second.counter << "@level" << kv.first << ", ";  \
-      }                                                           \
-    }                                                             \
-  }
-
-void PerfContextByLevel::Reset() {
-#ifndef NPERF_CONTEXT
-  bloom_filter_useful = 0;
-  bloom_filter_full_positive = 0;
-  bloom_filter_full_true_positive = 0;
-  block_cache_hit_count = 0;
-  block_cache_miss_count = 0;
-#endif
-}
 
 std::string PerfContext::ToString(bool exclude_zero_counters) const {
 #ifdef NPERF_CONTEXT
@@ -160,11 +122,6 @@ std::string PerfContext::ToString(bool exclude_zero_counters) const {
   PERF_CONTEXT_OUTPUT(block_read_count);
   PERF_CONTEXT_OUTPUT(block_read_byte);
   PERF_CONTEXT_OUTPUT(block_read_time);
-  PERF_CONTEXT_OUTPUT(block_cache_index_hit_count);
-  PERF_CONTEXT_OUTPUT(index_block_read_count);
-  PERF_CONTEXT_OUTPUT(block_cache_filter_hit_count);
-  PERF_CONTEXT_OUTPUT(filter_block_read_count);
-  PERF_CONTEXT_OUTPUT(compression_dict_block_read_count);
   PERF_CONTEXT_OUTPUT(block_checksum_time);
   PERF_CONTEXT_OUTPUT(block_decompress_time);
   PERF_CONTEXT_OUTPUT(get_read_bytes);
@@ -229,33 +186,8 @@ std::string PerfContext::ToString(bool exclude_zero_counters) const {
   PERF_CONTEXT_OUTPUT(env_lock_file_nanos);
   PERF_CONTEXT_OUTPUT(env_unlock_file_nanos);
   PERF_CONTEXT_OUTPUT(env_new_logger_nanos);
-  PERF_CONTEXT_OUTPUT(get_cpu_nanos);
-  PERF_CONTEXT_BY_LEVEL_OUTPUT_ONE_COUNTER(bloom_filter_useful);
-  PERF_CONTEXT_BY_LEVEL_OUTPUT_ONE_COUNTER(bloom_filter_full_positive);
-  PERF_CONTEXT_BY_LEVEL_OUTPUT_ONE_COUNTER(bloom_filter_full_true_positive);
-  PERF_CONTEXT_BY_LEVEL_OUTPUT_ONE_COUNTER(block_cache_hit_count);
-  PERF_CONTEXT_BY_LEVEL_OUTPUT_ONE_COUNTER(block_cache_miss_count);
   return ss.str();
 #endif
-}
-
-void PerfContext::EnablePerLevelPerfContext() {
-  if (!level_to_perf_context) {
-    level_to_perf_context = new std::map<uint32_t, PerfContextByLevel>();
-  }
-  per_level_perf_context_enabled = true;
-}
-
-void PerfContext::DisablePerLevelPerfContext(){
-  per_level_perf_context_enabled = false;
-}
-
-void PerfContext::ClearPerLevelPerfContext(){
-  if (level_to_perf_context) {
-    delete level_to_perf_context;
-    level_to_perf_context = nullptr;
-  }
-  per_level_perf_context_enabled = false;
 }
 
 }

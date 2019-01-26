@@ -3,7 +3,8 @@
 //  COPYING file in the root directory) and Apache 2.0 License
 //  (found in the LICENSE.Apache file in the root directory).
 
-#pragma once
+#ifndef STORAGE_ROCKSDB_INCLUDE_TRANSACTION_LOG_ITERATOR_H_
+#define STORAGE_ROCKSDB_INCLUDE_TRANSACTION_LOG_ITERATOR_H_
 
 #include "rocksdb/status.h"
 #include "rocksdb/types.h"
@@ -60,7 +61,7 @@ struct BatchResult {
 
   // Add empty __ctor and __dtor for the rule of five
   // However, preserve the original semantics and prohibit copying
-  // as the std::unique_ptr member does not copy.
+  // as the unique_ptr member does not copy.
   BatchResult() {}
 
   ~BatchResult() {}
@@ -120,3 +121,5 @@ class TransactionLogIterator {
   };
 };
 } //  namespace rocksdb
+
+#endif  // STORAGE_ROCKSDB_INCLUDE_TRANSACTION_LOG_ITERATOR_H_

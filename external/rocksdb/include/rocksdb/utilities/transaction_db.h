@@ -137,15 +137,6 @@ struct TransactionOptions {
 
   // The maximum number of bytes used for the write batch. 0 means no limit.
   size_t max_write_batch_size = 0;
-
-  // Skip Concurrency Control. This could be as an optimization if the
-  // application knows that the transaction would not have any conflict with
-  // concurrent transactions. It could also be used during recovery if (i)
-  // application guarantees no conflict between prepared transactions in the WAL
-  // (ii) application guarantees that recovered transactions will be rolled
-  // back/commit before new transactions start.
-  // Default: false
-  bool skip_concurrency_control = false;
 };
 
 // The per-write optimizations that do not involve transactions. TransactionDB
@@ -171,8 +162,8 @@ struct KeyLockInfo {
 struct DeadlockInfo {
   TransactionID m_txn_id;
   uint32_t m_cf_id;
-  bool m_exclusive;
   std::string m_waiting_key;
+  bool m_exclusive;
 };
 
 struct DeadlockPath {

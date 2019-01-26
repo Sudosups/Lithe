@@ -279,7 +279,7 @@ const std::string options_file_content = R"OPTIONS_FILE(
 
 TEST_F(DBBenchTest, OptionsFileFromFile) {
   const std::string kOptionsFileName = test_path_ + "/OPTIONS_flash";
-  std::unique_ptr<WritableFile> writable;
+  unique_ptr<WritableFile> writable;
   ASSERT_OK(Env::Default()->NewWritableFile(kOptionsFileName, &writable,
                                             EnvOptions()));
   ASSERT_OK(writable->Append(options_file_content));

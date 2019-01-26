@@ -33,7 +33,7 @@ class MockedBlockBasedTable : public BlockBasedTable {
       const SliceTransform* prefix_extractor) const override {
     Slice slice = slices[filter_blk_handle.offset()];
     auto obj = new FullFilterBlockReader(
-        prefix_extractor, true, BlockContents(slice),
+        prefix_extractor, true, BlockContents(slice, false, kNoCompression),
         rep_->table_options.filter_policy->GetFilterBitsReader(slice), nullptr);
     return {obj, nullptr};
   }
@@ -44,15 +44,13 @@ class MockedBlockBasedTable : public BlockBasedTable {
       const SliceTransform* prefix_extractor) const override {
     Slice slice = slices[filter_blk_handle.offset()];
     auto obj = new FullFilterBlockReader(
-        prefix_extractor, true, BlockContents(slice),
+        prefix_extractor, true, BlockContents(slice, false, kNoCompression),
         rep_->table_options.filter_policy->GetFilterBitsReader(slice), nullptr);
     return obj;
   }
 };
 
-class PartitionedFilterBlockTest
-    : public testing::Test,
-      virtual public ::testing::WithParamInterface<uint32_t> {
+class PartitionedFilterBlockTest : public testing::Test {
  public:
   BlockBasedTableOptions table_options_;
   InternalKeyComparator icomp = InternalKeyComparator(BytewiseComparator());
@@ -62,8 +60,6 @@ class PartitionedFilterBlockTest
     table_options_.no_block_cache = true;  // Otherwise BlockBasedTable::Close
                                            // will access variable that are not
                                            // initialized in our mocked version
-    table_options_.format_version = GetParam();
-    table_options_.index_block_restart_interval = 3;
   }
 
   std::shared_ptr<Cache> cache_;
@@ -104,9 +100,7 @@ class PartitionedFilterBlockTest
   }
 
   PartitionedIndexBuilder* NewIndexBuilder() {
-    const bool kValueDeltaEncoded = true;
-    return PartitionedIndexBuilder::CreateIndexBuilder(
-        &icomp, !kValueDeltaEncoded, table_options_);
+    return PartitionedIndexBuilder::CreateIndexBuilder(&icomp, table_options_);
   }
 
   PartitionedFilterBlockBuilder* NewBuilder(
@@ -119,12 +113,11 @@ class PartitionedFilterBlockTest
               99) /
              100);
     partition_size = std::max(partition_size, static_cast<uint32_t>(1));
-    const bool kValueDeltaEncoded = true;
     return new PartitionedFilterBlockBuilder(
         prefix_extractor, table_options_.whole_key_filtering,
         table_options_.filter_policy->GetFilterBitsBuilder(),
-        table_options_.index_block_restart_interval, !kValueDeltaEncoded,
-        p_index_builder, partition_size);
+        table_options_.index_block_restart_interval, p_index_builder,
+        partition_size);
   }
 
   std::unique_ptr<MockedBlockBasedTable> table;
@@ -147,11 +140,10 @@ class PartitionedFilterBlockTest
     const bool kImmortal = true;
     table.reset(new MockedBlockBasedTable(
         new BlockBasedTable::Rep(ioptions, env_options, table_options_, icomp,
-                                 !kSkipFilters, 0, !kImmortal)));
+                                 !kSkipFilters, !kImmortal)));
     auto reader = new PartitionedFilterBlockReader(
-        prefix_extractor, true, BlockContents(slice), nullptr, nullptr, icomp,
-        table.get(), pib->seperator_is_key_plus_seq(),
-        !pib->get_use_value_delta_encoding());
+        prefix_extractor, true, BlockContents(slice, false, kNoCompression),
+        nullptr, nullptr, icomp, table.get(), pib->seperator_is_key_plus_seq());
     return reader;
   }
 
@@ -283,19 +275,14 @@ class PartitionedFilterBlockTest
   }
 };
 
-INSTANTIATE_TEST_CASE_P(FormatDef, PartitionedFilterBlockTest,
-                        testing::Values(test::kDefaultFormatVersion));
-INSTANTIATE_TEST_CASE_P(FormatLatest, PartitionedFilterBlockTest,
-                        testing::Values(test::kLatestFormatVersion));
-
-TEST_P(PartitionedFilterBlockTest, EmptyBuilder) {
+TEST_F(PartitionedFilterBlockTest, EmptyBuilder) {
   std::unique_ptr<PartitionedIndexBuilder> pib(NewIndexBuilder());
   std::unique_ptr<PartitionedFilterBlockBuilder> builder(NewBuilder(pib.get()));
   const bool empty = true;
   VerifyReader(builder.get(), pib.get(), empty);
 }
 
-TEST_P(PartitionedFilterBlockTest, OneBlock) {
+TEST_F(PartitionedFilterBlockTest, OneBlock) {
   uint64_t max_index_size = MaxIndexSize();
   for (uint64_t i = 1; i < max_index_size + 1; i++) {
     table_options_.metadata_block_size = i;
@@ -303,7 +290,7 @@ TEST_P(PartitionedFilterBlockTest, OneBlock) {
   }
 }
 
-TEST_P(PartitionedFilterBlockTest, TwoBlocksPerKey) {
+TEST_F(PartitionedFilterBlockTest, TwoBlocksPerKey) {
   uint64_t max_index_size = MaxIndexSize();
   for (uint64_t i = 1; i < max_index_size + 1; i++) {
     table_options_.metadata_block_size = i;
@@ -313,7 +300,7 @@ TEST_P(PartitionedFilterBlockTest, TwoBlocksPerKey) {
 
 // This reproduces the bug that a prefix is the same among multiple consecutive
 // blocks but the bug would add it only to the first block.
-TEST_P(PartitionedFilterBlockTest, SamePrefixInMultipleBlocks) {
+TEST_F(PartitionedFilterBlockTest, SamePrefixInMultipleBlocks) {
   // some small number to cause partition cuts
   table_options_.metadata_block_size = 1;
   std::unique_ptr<const SliceTransform> prefix_extractor
@@ -339,7 +326,7 @@ TEST_P(PartitionedFilterBlockTest, SamePrefixInMultipleBlocks) {
   }
 }
 
-TEST_P(PartitionedFilterBlockTest, OneBlockPerKey) {
+TEST_F(PartitionedFilterBlockTest, OneBlockPerKey) {
   uint64_t max_index_size = MaxIndexSize();
   for (uint64_t i = 1; i < max_index_size + 1; i++) {
     table_options_.metadata_block_size = i;
@@ -347,7 +334,7 @@ TEST_P(PartitionedFilterBlockTest, OneBlockPerKey) {
   }
 }
 
-TEST_P(PartitionedFilterBlockTest, PartitionCount) {
+TEST_F(PartitionedFilterBlockTest, PartitionCount) {
   int num_keys = sizeof(keys) / sizeof(*keys);
   table_options_.metadata_block_size =
       std::max(MaxIndexSize(), MaxFilterSize());

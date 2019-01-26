@@ -67,7 +67,7 @@ struct ReplicationThread {
 static void ReplicationThreadBody(void* arg) {
   ReplicationThread* t = reinterpret_cast<ReplicationThread*>(arg);
   DB* db = t->db;
-  std::unique_ptr<TransactionLogIterator> iter;
+  unique_ptr<TransactionLogIterator> iter;
   SequenceNumber currentSeqNum = 1;
   while (!t->stop.load(std::memory_order_acquire)) {
     iter.reset();

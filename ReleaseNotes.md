@@ -6,6 +6,5 @@
 - LITHE rebrand
 - AppVeyor CI integration
 - New block size algorithm
-- Updated 6 year old RocksDB
 - General rebrand
 - 

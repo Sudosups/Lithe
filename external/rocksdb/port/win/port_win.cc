@@ -26,29 +26,10 @@
 #include <exception>
 #include <chrono>
 
-#ifdef ROCKSDB_WINDOWS_UTF8_FILENAMES
-// utf8 <-> utf16
-#include <string>
-#include <locale>
-#include <codecvt>
-#endif
-
 #include "util/logging.h"
 
 namespace rocksdb {
 namespace port {
-
-#ifdef ROCKSDB_WINDOWS_UTF8_FILENAMES
-std::string utf16_to_utf8(const std::wstring& utf16) {
-  std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>,wchar_t> convert;
-  return convert.to_bytes(utf16);
-}
-
-std::wstring utf8_to_utf16(const std::string& utf8) {
-  std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
-  return converter.from_bytes(utf8);
-}
-#endif
 
 void gettimeofday(struct timeval* tv, struct timezone* /* tz */) {
   using namespace std::chrono;
@@ -129,7 +110,7 @@ void InitOnce(OnceType* once, void (*initializer)()) {
 struct DIR {
   HANDLE      handle_;
   bool        firstread_;
-  RX_WIN32_FIND_DATA data_;
+  WIN32_FIND_DATA data_;
   dirent entry_;
 
   DIR() : handle_(INVALID_HANDLE_VALUE),
@@ -156,7 +137,7 @@ DIR* opendir(const char* name) {
 
   std::unique_ptr<DIR> dir(new DIR);
 
-  dir->handle_ = RX_FindFirstFileEx(RX_FN(pattern).c_str(), 
+  dir->handle_ = ::FindFirstFileExA(pattern.c_str(), 
     FindExInfoBasic, // Do not want alternative name
     &dir->data_,
     FindExSearchNameMatch,
@@ -167,9 +148,8 @@ DIR* opendir(const char* name) {
     return nullptr;
   }
 
-  RX_FILESTRING x(dir->data_.cFileName, RX_FNLEN(dir->data_.cFileName));
   strcpy_s(dir->entry_.d_name, sizeof(dir->entry_.d_name), 
-           FN_TO_RX(x).c_str());
+    dir->data_.cFileName);
 
   return dir.release();
 }
@@ -185,15 +165,14 @@ struct dirent* readdir(DIR* dirp) {
     return &dirp->entry_;
   }
 
-  auto ret = RX_FindNextFile(dirp->handle_, &dirp->data_);
+  auto ret = ::FindNextFileA(dirp->handle_, &dirp->data_);
 
   if (ret == 0) {
     return nullptr;
   }
 
-  RX_FILESTRING x(dirp->data_.cFileName, RX_FNLEN(dirp->data_.cFileName));
   strcpy_s(dirp->entry_.d_name, sizeof(dirp->entry_.d_name), 
-           FN_TO_RX(x).c_str());
+    dirp->data_.cFileName);
 
   return &dirp->entry_;
 }
@@ -203,15 +182,11 @@ int closedir(DIR* dirp) {
   return 0;
 }
 
-int truncate(const char* path, int64_t length) {
+int truncate(const char* path, int64_t len) {
   if (path == nullptr) {
     errno = EFAULT;
     return -1;
   }
-  return rocksdb::port::Truncate(path, length);
-}
-
-int Truncate(std::string path, int64_t len) {
 
   if (len < 0) {
     errno = EINVAL;
@@ -219,7 +194,7 @@ int Truncate(std::string path, int64_t len) {
   }
 
   HANDLE hFile =
-      RX_CreateFile(RX_FN(path).c_str(), GENERIC_READ | GENERIC_WRITE,
+      CreateFile(path, GENERIC_READ | GENERIC_WRITE,
                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                  NULL,           // Security attrs
                  OPEN_EXISTING,  // Truncate existing file only

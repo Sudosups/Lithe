@@ -25,6 +25,7 @@ namespace rocksdb {
 
 class Arena;
 class TableReader;
+class InternalIterator;
 
 class CuckooTableReader: public TableReader {
  public:

@@ -50,11 +50,10 @@ TEST_F(PlainTableKeyDecoderTest, ReadNonMmap) {
   test::StringSource* string_source =
       new test::StringSource(contents, 0, false);
 
-  std::unique_ptr<RandomAccessFileReader> file_reader(
+  unique_ptr<RandomAccessFileReader> file_reader(
       test::GetRandomAccessFileReader(string_source));
-  std::unique_ptr<PlainTableReaderFileInfo> file_info(
-      new PlainTableReaderFileInfo(std::move(file_reader), EnvOptions(),
-                                   kLength));
+  unique_ptr<PlainTableReaderFileInfo> file_info(new PlainTableReaderFileInfo(
+      std::move(file_reader), EnvOptions(), kLength));
 
   {
     PlainTableFileReader reader(file_info.get());
@@ -261,7 +260,7 @@ class TestPlainTableReader : public PlainTableReader {
                        int bloom_bits_per_key, double hash_table_ratio,
                        size_t index_sparseness,
                        const TableProperties* table_properties,
-                       std::unique_ptr<RandomAccessFileReader>&& file,
+                       unique_ptr<RandomAccessFileReader>&& file,
                        const ImmutableCFOptions& ioptions,
                        const SliceTransform* prefix_extractor,
                        bool* expect_bloom_not_match, bool store_index_in_file,
@@ -328,8 +327,8 @@ class TestPlainTableFactory : public PlainTableFactory {
 
   Status NewTableReader(
       const TableReaderOptions& table_reader_options,
-      std::unique_ptr<RandomAccessFileReader>&& file, uint64_t file_size,
-      std::unique_ptr<TableReader>* table,
+      unique_ptr<RandomAccessFileReader>&& file, uint64_t file_size,
+      unique_ptr<TableReader>* table,
       bool /*prefetch_index_and_filter_in_cache*/) const override {
     TableProperties* props = nullptr;
     auto s =

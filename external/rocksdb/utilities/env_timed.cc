@@ -18,21 +18,21 @@ class TimedEnv : public EnvWrapper {
   explicit TimedEnv(Env* base_env) : EnvWrapper(base_env) {}
 
   virtual Status NewSequentialFile(const std::string& fname,
-                                   std::unique_ptr<SequentialFile>* result,
+                                   unique_ptr<SequentialFile>* result,
                                    const EnvOptions& options) override {
     PERF_TIMER_GUARD(env_new_sequential_file_nanos);
     return EnvWrapper::NewSequentialFile(fname, result, options);
   }
 
   virtual Status NewRandomAccessFile(const std::string& fname,
-                                     std::unique_ptr<RandomAccessFile>* result,
+                                     unique_ptr<RandomAccessFile>* result,
                                      const EnvOptions& options) override {
     PERF_TIMER_GUARD(env_new_random_access_file_nanos);
     return EnvWrapper::NewRandomAccessFile(fname, result, options);
   }
 
   virtual Status NewWritableFile(const std::string& fname,
-                                 std::unique_ptr<WritableFile>* result,
+                                 unique_ptr<WritableFile>* result,
                                  const EnvOptions& options) override {
     PERF_TIMER_GUARD(env_new_writable_file_nanos);
     return EnvWrapper::NewWritableFile(fname, result, options);
@@ -40,21 +40,21 @@ class TimedEnv : public EnvWrapper {
 
   virtual Status ReuseWritableFile(const std::string& fname,
                                    const std::string& old_fname,
-                                   std::unique_ptr<WritableFile>* result,
+                                   unique_ptr<WritableFile>* result,
                                    const EnvOptions& options) override {
     PERF_TIMER_GUARD(env_reuse_writable_file_nanos);
     return EnvWrapper::ReuseWritableFile(fname, old_fname, result, options);
   }
 
   virtual Status NewRandomRWFile(const std::string& fname,
-                                 std::unique_ptr<RandomRWFile>* result,
+                                 unique_ptr<RandomRWFile>* result,
                                  const EnvOptions& options) override {
     PERF_TIMER_GUARD(env_new_random_rw_file_nanos);
     return EnvWrapper::NewRandomRWFile(fname, result, options);
   }
 
   virtual Status NewDirectory(const std::string& name,
-                              std::unique_ptr<Directory>* result) override {
+                              unique_ptr<Directory>* result) override {
     PERF_TIMER_GUARD(env_new_directory_nanos);
     return EnvWrapper::NewDirectory(name, result);
   }
@@ -131,7 +131,7 @@ class TimedEnv : public EnvWrapper {
   }
 
   virtual Status NewLogger(const std::string& fname,
-                           std::shared_ptr<Logger>* result) override {
+                           shared_ptr<Logger>* result) override {
     PERF_TIMER_GUARD(env_new_logger_nanos);
     return EnvWrapper::NewLogger(fname, result);
   }

@@ -439,10 +439,6 @@ DBOptions* DBOptions::OldDefaults(int rocksdb_major_version,
 
 ColumnFamilyOptions* ColumnFamilyOptions::OldDefaults(
     int rocksdb_major_version, int rocksdb_minor_version) {
-  if (rocksdb_major_version < 5 ||
-      (rocksdb_major_version == 5 && rocksdb_minor_version <= 18)) {
-    compaction_pri = CompactionPri::kByCompensatedSize;
-  }
   if (rocksdb_major_version < 4 ||
       (rocksdb_major_version == 4 && rocksdb_minor_version < 7)) {
     write_buffer_size = 4 << 20;
@@ -456,6 +452,7 @@ ColumnFamilyOptions* ColumnFamilyOptions::OldDefaults(
   } else if (rocksdb_major_version == 5 && rocksdb_minor_version < 2) {
     level0_stop_writes_trigger = 30;
   }
+  compaction_pri = CompactionPri::kByCompensatedSize;
 
   return this;
 }
@@ -482,9 +479,6 @@ ColumnFamilyOptions* ColumnFamilyOptions::OptimizeForPointLookup(
   prefix_extractor.reset(NewNoopTransform());
   BlockBasedTableOptions block_based_options;
   block_based_options.index_type = BlockBasedTableOptions::kHashSearch;
-  block_based_options.data_block_index_type =
-      BlockBasedTableOptions::kDataBlockBinaryAndHash;
-  block_based_options.data_block_hash_table_util_ratio = 0.75;
   block_based_options.filter_policy.reset(NewBloomFilterPolicy(10));
   block_based_options.block_cache =
       NewLRUCache(static_cast<size_t>(block_cache_size_mb * 1024 * 1024));

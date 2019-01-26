@@ -47,7 +47,8 @@
  * @author Tian Xia <tianx@fb.com>
  */
 
-#pragma once
+#ifndef FBSON_FBSONPARSER_H
+#define FBSON_FBSONPARSER_H
 
 #include <cmath>
 #include <limits>
@@ -740,3 +741,5 @@ class FbsonJsonParserT {
 typedef FbsonJsonParserT<FbsonOutStream> FbsonJsonParser;
 
 } // namespace fbson
+
+#endif // FBSON_FBSONPARSER_H

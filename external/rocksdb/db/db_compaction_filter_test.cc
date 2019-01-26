@@ -340,10 +340,9 @@ TEST_F(DBTestCompactionFilter, CompactionFilter) {
   Arena arena;
   {
     InternalKeyComparator icmp(options.comparator);
-    ReadRangeDelAggregator range_del_agg(&icmp,
-                                         kMaxSequenceNumber /* upper_bound */);
-    ScopedArenaIterator iter(dbfull()->NewInternalIterator(
-        &arena, &range_del_agg, kMaxSequenceNumber, handles_[1]));
+    RangeDelAggregator range_del_agg(icmp, {} /* snapshots */);
+    ScopedArenaIterator iter(
+        dbfull()->NewInternalIterator(&arena, &range_del_agg, handles_[1]));
     iter->SeekToFirst();
     ASSERT_OK(iter->status());
     while (iter->Valid()) {
@@ -430,10 +429,9 @@ TEST_F(DBTestCompactionFilter, CompactionFilter) {
   count = 0;
   {
     InternalKeyComparator icmp(options.comparator);
-    ReadRangeDelAggregator range_del_agg(&icmp,
-                                         kMaxSequenceNumber /* upper_bound */);
-    ScopedArenaIterator iter(dbfull()->NewInternalIterator(
-        &arena, &range_del_agg, kMaxSequenceNumber, handles_[1]));
+    RangeDelAggregator range_del_agg(icmp, {} /* snapshots */);
+    ScopedArenaIterator iter(
+        dbfull()->NewInternalIterator(&arena, &range_del_agg, handles_[1]));
     iter->SeekToFirst();
     ASSERT_OK(iter->status());
     while (iter->Valid()) {
@@ -648,10 +646,9 @@ TEST_F(DBTestCompactionFilter, CompactionFilterContextManual) {
     int total = 0;
     Arena arena;
     InternalKeyComparator icmp(options.comparator);
-    ReadRangeDelAggregator range_del_agg(&icmp,
-                                         kMaxSequenceNumber /* snapshots */);
-    ScopedArenaIterator iter(dbfull()->NewInternalIterator(
-        &arena, &range_del_agg, kMaxSequenceNumber));
+    RangeDelAggregator range_del_agg(icmp, {} /* snapshots */);
+    ScopedArenaIterator iter(
+        dbfull()->NewInternalIterator(&arena, &range_del_agg));
     iter->SeekToFirst();
     ASSERT_OK(iter->status());
     while (iter->Valid()) {
@@ -851,7 +848,7 @@ TEST_F(DBTestCompactionFilter, SkipUntilWithBloomFilter) {
   DestroyAndReopen(options);
 
   Put("0000000010", "v10");
-  Put("0000000020", "v20");  // skipped
+  Put("0000000020", "v20"); // skipped
   Put("0000000050", "v50");
   Flush();
 

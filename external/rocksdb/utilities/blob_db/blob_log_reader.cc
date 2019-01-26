@@ -24,9 +24,10 @@ Reader::Reader(unique_ptr<RandomAccessFileReader>&& file_reader, Env* env,
       buffer_(),
       next_byte_(0) {}
 
-Status Reader::ReadSlice(uint64_t size, Slice* slice, char* buf) {
+Status Reader::ReadSlice(uint64_t size, Slice* slice, std::string* buf) {
   StopWatch read_sw(env_, statistics_, BLOB_DB_BLOB_FILE_READ_MICROS);
-  Status s = file_->Read(next_byte_, static_cast<size_t>(size), slice, buf);
+  buf->reserve(size);
+  Status s = file_->Read(next_byte_, size, slice, &(*buf)[0]);
   next_byte_ += size;
   if (!s.ok()) {
     return s;
@@ -41,7 +42,7 @@ Status Reader::ReadSlice(uint64_t size, Slice* slice, char* buf) {
 Status Reader::ReadHeader(BlobLogHeader* header) {
   assert(file_.get() != nullptr);
   assert(next_byte_ == 0);
-  Status s = ReadSlice(BlobLogHeader::kSize, &buffer_, header_buf_);
+  Status s = ReadSlice(BlobLogHeader::kSize, &buffer_, &backing_store_);
   if (!s.ok()) {
     return s;
   }
@@ -55,7 +56,7 @@ Status Reader::ReadHeader(BlobLogHeader* header) {
 
 Status Reader::ReadRecord(BlobLogRecord* record, ReadLevel level,
                           uint64_t* blob_offset) {
-  Status s = ReadSlice(BlobLogRecord::kHeaderSize, &buffer_, header_buf_);
+  Status s = ReadSlice(BlobLogRecord::kHeaderSize, &buffer_, &backing_store_);
   if (!s.ok()) {
     return s;
   }
@@ -79,18 +80,14 @@ Status Reader::ReadRecord(BlobLogRecord* record, ReadLevel level,
       break;
 
     case kReadHeaderKey:
-      record->key_buf.reset(new char[record->key_size]);
-      s = ReadSlice(record->key_size, &record->key, record->key_buf.get());
+      s = ReadSlice(record->key_size, &record->key, &record->key_buf);
       next_byte_ += record->value_size;
       break;
 
     case kReadHeaderKeyBlob:
-      record->key_buf.reset(new char[record->key_size]);
-      s = ReadSlice(record->key_size, &record->key, record->key_buf.get());
+      s = ReadSlice(record->key_size, &record->key, &record->key_buf);
       if (s.ok()) {
-        record->value_buf.reset(new char[record->value_size]);
-        s = ReadSlice(record->value_size, &record->value,
-                      record->value_buf.get());
+        s = ReadSlice(record->value_size, &record->value, &record->value_buf);
       }
       if (s.ok()) {
         s = record->CheckBlobCRC();

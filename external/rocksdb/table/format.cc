@@ -24,7 +24,6 @@
 #include "util/crc32c.h"
 #include "util/file_reader_writer.h"
 #include "util/logging.h"
-#include "util/memory_allocator.h"
 #include "util/stop_watch.h"
 #include "util/string_util.h"
 #include "util/xxhash.h"
@@ -58,18 +57,6 @@ void BlockHandle::EncodeTo(std::string* dst) const {
 Status BlockHandle::DecodeFrom(Slice* input) {
   if (GetVarint64(input, &offset_) &&
       GetVarint64(input, &size_)) {
-    return Status::OK();
-  } else {
-    // reset in case failure after partially decoding
-    offset_ = 0;
-    size_ = 0;
-    return Status::Corruption("bad block handle");
-  }
-}
-
-Status BlockHandle::DecodeSizeFrom(uint64_t _offset, Slice* input) {
-  if (GetVarint64(input, &size_)) {
-    offset_ = _offset;
     return Status::OK();
   } else {
     // reset in case failure after partially decoding
@@ -278,18 +265,18 @@ Status ReadFooterFromFile(RandomAccessFileReader* file,
 }
 
 Status UncompressBlockContentsForCompressionType(
-    const UncompressionInfo& uncompression_info, const char* data, size_t n,
+    const UncompressionContext& uncompression_ctx, const char* data, size_t n,
     BlockContents* contents, uint32_t format_version,
-    const ImmutableCFOptions& ioptions, MemoryAllocator* allocator) {
-  CacheAllocationPtr ubuf;
+    const ImmutableCFOptions& ioptions) {
+  std::unique_ptr<char[]> ubuf;
 
-  assert(uncompression_info.type() != kNoCompression &&
+  assert(uncompression_ctx.type() != kNoCompression &&
          "Invalid compression type");
 
   StopWatchNano timer(ioptions.env,
     ShouldReportDetailedTime(ioptions.env, ioptions.statistics));
   int decompress_size = 0;
-  switch (uncompression_info.type()) {
+  switch (uncompression_ctx.type()) {
     case kSnappyCompression: {
       size_t ulength = 0;
       static char snappy_corrupt_msg[] =
@@ -297,82 +284,81 @@ Status UncompressBlockContentsForCompressionType(
       if (!Snappy_GetUncompressedLength(data, n, &ulength)) {
         return Status::Corruption(snappy_corrupt_msg);
       }
-      ubuf = AllocateBlock(ulength, allocator);
+      ubuf.reset(new char[ulength]);
       if (!Snappy_Uncompress(data, n, ubuf.get())) {
         return Status::Corruption(snappy_corrupt_msg);
       }
-      *contents = BlockContents(std::move(ubuf), ulength);
+      *contents = BlockContents(std::move(ubuf), ulength, true, kNoCompression);
       break;
     }
     case kZlibCompression:
-      ubuf = Zlib_Uncompress(
-          uncompression_info, data, n, &decompress_size,
-          GetCompressFormatForVersion(kZlibCompression, format_version),
-          allocator);
+      ubuf.reset(Zlib_Uncompress(
+          uncompression_ctx, data, n, &decompress_size,
+          GetCompressFormatForVersion(kZlibCompression, format_version)));
       if (!ubuf) {
         static char zlib_corrupt_msg[] =
           "Zlib not supported or corrupted Zlib compressed block contents";
         return Status::Corruption(zlib_corrupt_msg);
       }
-      *contents = BlockContents(std::move(ubuf), decompress_size);
+      *contents =
+          BlockContents(std::move(ubuf), decompress_size, true, kNoCompression);
       break;
     case kBZip2Compression:
-      ubuf = BZip2_Uncompress(
+      ubuf.reset(BZip2_Uncompress(
           data, n, &decompress_size,
-          GetCompressFormatForVersion(kBZip2Compression, format_version),
-          allocator);
+          GetCompressFormatForVersion(kBZip2Compression, format_version)));
       if (!ubuf) {
         static char bzip2_corrupt_msg[] =
           "Bzip2 not supported or corrupted Bzip2 compressed block contents";
         return Status::Corruption(bzip2_corrupt_msg);
       }
-      *contents = BlockContents(std::move(ubuf), decompress_size);
+      *contents =
+          BlockContents(std::move(ubuf), decompress_size, true, kNoCompression);
       break;
     case kLZ4Compression:
-      ubuf = LZ4_Uncompress(
-          uncompression_info, data, n, &decompress_size,
-          GetCompressFormatForVersion(kLZ4Compression, format_version),
-          allocator);
+      ubuf.reset(LZ4_Uncompress(
+          uncompression_ctx, data, n, &decompress_size,
+          GetCompressFormatForVersion(kLZ4Compression, format_version)));
       if (!ubuf) {
         static char lz4_corrupt_msg[] =
           "LZ4 not supported or corrupted LZ4 compressed block contents";
         return Status::Corruption(lz4_corrupt_msg);
       }
-      *contents = BlockContents(std::move(ubuf), decompress_size);
+      *contents =
+          BlockContents(std::move(ubuf), decompress_size, true, kNoCompression);
       break;
     case kLZ4HCCompression:
-      ubuf = LZ4_Uncompress(
-          uncompression_info, data, n, &decompress_size,
-          GetCompressFormatForVersion(kLZ4HCCompression, format_version),
-          allocator);
+      ubuf.reset(LZ4_Uncompress(
+          uncompression_ctx, data, n, &decompress_size,
+          GetCompressFormatForVersion(kLZ4HCCompression, format_version)));
       if (!ubuf) {
         static char lz4hc_corrupt_msg[] =
           "LZ4HC not supported or corrupted LZ4HC compressed block contents";
         return Status::Corruption(lz4hc_corrupt_msg);
       }
-      *contents = BlockContents(std::move(ubuf), decompress_size);
+      *contents =
+          BlockContents(std::move(ubuf), decompress_size, true, kNoCompression);
       break;
     case kXpressCompression:
-      // XPRESS allocates memory internally, thus no support for custom
-      // allocator.
       ubuf.reset(XPRESS_Uncompress(data, n, &decompress_size));
       if (!ubuf) {
         static char xpress_corrupt_msg[] =
           "XPRESS not supported or corrupted XPRESS compressed block contents";
         return Status::Corruption(xpress_corrupt_msg);
       }
-      *contents = BlockContents(std::move(ubuf), decompress_size);
+      *contents =
+        BlockContents(std::move(ubuf), decompress_size, true, kNoCompression);
       break;
     case kZSTD:
     case kZSTDNotFinalCompression:
-      ubuf = ZSTD_Uncompress(uncompression_info, data, n, &decompress_size,
-                             allocator);
+      ubuf.reset(ZSTD_Uncompress(uncompression_ctx, data, n, &decompress_size));
       if (!ubuf) {
         static char zstd_corrupt_msg[] =
             "ZSTD not supported or corrupted ZSTD compressed block contents";
         return Status::Corruption(zstd_corrupt_msg);
       }
-      *contents = BlockContents(std::move(ubuf), decompress_size);
+      *contents =
+          BlockContents(std::move(ubuf), decompress_size, true, kNoCompression);
       break;
     default:
       return Status::Corruption("bad block type");
@@ -395,16 +381,14 @@ Status UncompressBlockContentsForCompressionType(
 // buffer is returned via 'result' and it is upto the caller to
 // free this buffer.
 // format_version is the block format as defined in include/rocksdb/table.h
-Status UncompressBlockContents(const UncompressionInfo& uncompression_info,
+Status UncompressBlockContents(const UncompressionContext& uncompression_ctx,
                                const char* data, size_t n,
                                BlockContents* contents, uint32_t format_version,
-                               const ImmutableCFOptions& ioptions,
-                               MemoryAllocator* allocator) {
+                               const ImmutableCFOptions& ioptions) {
   assert(data[n] != kNoCompression);
-  assert(data[n] == uncompression_info.type());
-  return UncompressBlockContentsForCompressionType(uncompression_info, data, n,
-                                                   contents, format_version,
-                                                   ioptions, allocator);
+  assert(data[n] == uncompression_ctx.type());
+  return UncompressBlockContentsForCompressionType(
+      uncompression_ctx, data, n, contents, format_version, ioptions);
 }
 
 }  // namespace rocksdb

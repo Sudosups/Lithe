@@ -51,8 +51,7 @@ static std::string PrintContents(WriteBatch* b) {
       iter = mem->NewIterator(ReadOptions(), &arena);
       arena_iter_guard.set(iter);
     } else {
-      iter = mem->NewRangeTombstoneIterator(ReadOptions(),
-                                            kMaxSequenceNumber /* read_seq */);
+      iter = mem->NewRangeTombstoneIterator(ReadOptions());
       iter_guard.reset(iter);
     }
     if (iter == nullptr) {

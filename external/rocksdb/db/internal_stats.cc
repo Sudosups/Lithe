@@ -231,8 +231,6 @@ static const std::string current_version_number =
     "current-super-version-number";
 static const std::string estimate_live_data_size = "estimate-live-data-size";
 static const std::string min_log_number_to_keep_str = "min-log-number-to-keep";
-static const std::string min_obsolete_sst_number_to_keep_str =
-    "min-obsolete-sst-number-to-keep";
 static const std::string base_level_str = "base-level";
 static const std::string total_sst_files_size = "total-sst-files-size";
 static const std::string live_sst_files_size = "live-sst-files-size";
@@ -312,8 +310,6 @@ const std::string DB::Properties::kEstimateLiveDataSize =
     rocksdb_prefix + estimate_live_data_size;
 const std::string DB::Properties::kMinLogNumberToKeep =
     rocksdb_prefix + min_log_number_to_keep_str;
-const std::string DB::Properties::kMinObsoleteSstNumberToKeep =
-    rocksdb_prefix + min_obsolete_sst_number_to_keep_str;
 const std::string DB::Properties::kTotalSstFilesSize =
     rocksdb_prefix + total_sst_files_size;
 const std::string DB::Properties::kLiveSstFilesSize =
@@ -434,9 +430,6 @@ const std::unordered_map<std::string, DBPropertyInfo>
         {DB::Properties::kMinLogNumberToKeep,
          {false, nullptr, &InternalStats::HandleMinLogNumberToKeep, nullptr,
           nullptr}},
-        {DB::Properties::kMinObsoleteSstNumberToKeep,
-         {false, nullptr, &InternalStats::HandleMinObsoleteSstNumberToKeep,
-          nullptr, nullptr}},
         {DB::Properties::kBaseLevel,
          {false, nullptr, &InternalStats::HandleBaseLevel, nullptr, nullptr}},
         {DB::Properties::kTotalSstFilesSize,
@@ -830,13 +823,6 @@ bool InternalStats::HandleEstimateLiveDataSize(uint64_t* value, DBImpl* /*db*/,
 bool InternalStats::HandleMinLogNumberToKeep(uint64_t* value, DBImpl* db,
                                              Version* /*version*/) {
   *value = db->MinLogNumberToKeep();
-  return true;
-}
-
-bool InternalStats::HandleMinObsoleteSstNumberToKeep(uint64_t* value,
-                                                     DBImpl* db,
-                                                     Version* /*version*/) {
-  *value = db->MinObsoleteSstNumberToKeep();
   return true;
 }
 

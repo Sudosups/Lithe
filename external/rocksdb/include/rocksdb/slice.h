@@ -16,17 +16,14 @@
 // non-const method, all threads accessing the same Slice must use
 // external synchronization.
 
-#pragma once
+#ifndef STORAGE_ROCKSDB_INCLUDE_SLICE_H_
+#define STORAGE_ROCKSDB_INCLUDE_SLICE_H_
 
 #include <assert.h>
 #include <cstdio>
 #include <stddef.h>
 #include <string.h>
 #include <string>
-
-#ifdef __cpp_lib_string_view
-#include <string_view>
-#endif
 
 #include "rocksdb/cleanable.h"
 
@@ -43,12 +40,6 @@ class Slice {
   // Create a slice that refers to the contents of "s"
   /* implicit */
   Slice(const std::string& s) : data_(s.data()), size_(s.size()) { }
-
-#ifdef __cpp_lib_string_view
-  // Create a slice that refers to the same contents as "sv"
-  /* implicit */
-  Slice(std::string_view sv) : data_(sv.data()), size_(sv.size()) {}
-#endif
 
   // Create a slice that refers to s[0,strlen(s)-1]
   /* implicit */
@@ -94,13 +85,6 @@ class Slice {
   // Return a string that contains the copy of the referenced data.
   // when hex is true, returns a string of twice the length hex encoded (0-9A-F)
   std::string ToString(bool hex = false) const;
-
-#ifdef __cpp_lib_string_view
-  // Return a string_view that references the same data as this slice.
-  std::string_view ToStringView() const {
-    return std::string_view(data_, size_);
-  }
-#endif
 
   // Decodes the current slice interpreted as an hexadecimal string into result,
   // if successful returns true, if this isn't a valid hex string
@@ -256,3 +240,5 @@ inline size_t Slice::difference_offset(const Slice& b) const {
 }
 
 }  // namespace rocksdb
+
+#endif  // STORAGE_ROCKSDB_INCLUDE_SLICE_H_

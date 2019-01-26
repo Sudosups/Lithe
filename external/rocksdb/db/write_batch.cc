@@ -414,13 +414,8 @@ Status WriteBatch::Iterate(Handler* handler) const {
   char tag = 0;
   uint32_t column_family = 0;  // default
   bool last_was_try_again = false;
-  bool handler_continue = true;
-  while (((s.ok() && !input.empty()) || UNLIKELY(s.IsTryAgain()))) {
-    handler_continue = handler->Continue();
-    if (!handler_continue) {
-      break;
-    }
-
+  while (((s.ok() && !input.empty()) || UNLIKELY(s.IsTryAgain())) &&
+         handler->Continue()) {
     if (LIKELY(!s.IsTryAgain())) {
       last_was_try_again = false;
       tag = 0;
@@ -588,7 +583,7 @@ Status WriteBatch::Iterate(Handler* handler) const {
   if (!s.ok()) {
     return s;
   }
-  if (handler_continue && found != WriteBatchInternal::Count(this)) {
+  if (found != WriteBatchInternal::Count(this)) {
     return Status::Corruption("WriteBatch has wrong count");
   } else {
     return Status::OK();
@@ -732,11 +727,6 @@ Status WriteBatchInternal::MarkEndPrepare(WriteBatch* b, const Slice& xid,
                               ContentFlags::HAS_END_PREPARE |
                               ContentFlags::HAS_BEGIN_PREPARE,
                           std::memory_order_relaxed);
-  if (unprepared_batch) {
-    b->content_flags_.store(b->content_flags_.load(std::memory_order_relaxed) |
-                                ContentFlags::HAS_BEGIN_UNPREPARE,
-                            std::memory_order_relaxed);
-  }
   return Status::OK();
 }
 
@@ -1053,7 +1043,7 @@ class MemTableInserter : public WriteBatch::Handler {
   // a map is too expensive in the Write() path as they
   // cause memory allocations though unused.
   // Make creation optional but do not incur
-  // std::unique_ptr additional allocation
+  // unique_ptr additional allocation
   using MemPostInfoMap = std::map<MemTable*, MemTablePostProcessInfo>;
   using PostMapType = std::aligned_storage<sizeof(MemPostInfoMap)>::type;
   PostMapType mem_post_info_map_;

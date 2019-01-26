@@ -19,16 +19,16 @@ Status CopyFile(Env* env, const std::string& source,
                 const std::string& destination, uint64_t size, bool use_fsync) {
   const EnvOptions soptions;
   Status s;
-  std::unique_ptr<SequentialFileReader> src_reader;
-  std::unique_ptr<WritableFileWriter> dest_writer;
+  unique_ptr<SequentialFileReader> src_reader;
+  unique_ptr<WritableFileWriter> dest_writer;
 
   {
-    std::unique_ptr<SequentialFile> srcfile;
+    unique_ptr<SequentialFile> srcfile;
     s = env->NewSequentialFile(source, &srcfile, soptions);
     if (!s.ok()) {
       return s;
     }
-    std::unique_ptr<WritableFile> destfile;
+    unique_ptr<WritableFile> destfile;
     s = env->NewWritableFile(destination, &destfile, soptions);
     if (!s.ok()) {
       return s;
@@ -42,8 +42,7 @@ Status CopyFile(Env* env, const std::string& source,
       }
     }
     src_reader.reset(new SequentialFileReader(std::move(srcfile), source));
-    dest_writer.reset(
-        new WritableFileWriter(std::move(destfile), destination, soptions));
+    dest_writer.reset(new WritableFileWriter(std::move(destfile), soptions));
   }
 
   char buffer[4096];
@@ -68,23 +67,18 @@ Status CopyFile(Env* env, const std::string& source,
 
 // Utility function to create a file with the provided contents
 Status CreateFile(Env* env, const std::string& destination,
-                  const std::string& contents, bool use_fsync) {
+                  const std::string& contents) {
   const EnvOptions soptions;
   Status s;
-  std::unique_ptr<WritableFileWriter> dest_writer;
+  unique_ptr<WritableFileWriter> dest_writer;
 
-  std::unique_ptr<WritableFile> destfile;
+  unique_ptr<WritableFile> destfile;
   s = env->NewWritableFile(destination, &destfile, soptions);
   if (!s.ok()) {
     return s;
   }
-  dest_writer.reset(
-      new WritableFileWriter(std::move(destfile), destination, soptions));
-  s = dest_writer->Append(Slice(contents));
-  if (!s.ok()) {
-    return s;
-  }
-  return dest_writer->Sync(use_fsync);
+  dest_writer.reset(new WritableFileWriter(std::move(destfile), soptions));
+  return dest_writer->Append(Slice(contents));
 }
 
 Status DeleteSSTFile(const ImmutableDBOptions* db_options,

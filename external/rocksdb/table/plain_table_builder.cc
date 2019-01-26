@@ -166,12 +166,6 @@ void PlainTableBuilder::Add(const Slice& key, const Slice& value) {
   properties_.num_entries++;
   properties_.raw_key_size += key.size();
   properties_.raw_value_size += value.size();
-  if (internal_key.type == kTypeDeletion ||
-      internal_key.type == kTypeSingleDeletion) {
-    properties_.num_deletions++;
-  } else if (internal_key.type == kTypeMerge) {
-    properties_.num_merge_operands++;
-  }
 
   // notify property collectors
   NotifyCollectTableCollectorsOnAdd(

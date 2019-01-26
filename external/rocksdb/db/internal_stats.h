@@ -533,8 +533,6 @@ class InternalStats {
   bool HandleEstimateLiveDataSize(uint64_t* value, DBImpl* db,
                                   Version* version);
   bool HandleMinLogNumberToKeep(uint64_t* value, DBImpl* db, Version* version);
-  bool HandleMinObsoleteSstNumberToKeep(uint64_t* value, DBImpl* db,
-                                        Version* version);
   bool HandleActualDelayedWriteRate(uint64_t* value, DBImpl* db,
                                     Version* version);
   bool HandleIsWriteStopped(uint64_t* value, DBImpl* db, Version* version);

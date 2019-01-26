@@ -352,16 +352,14 @@ class WBWIIteratorImpl : public WBWIIterator {
   }
 
   virtual void SeekToFirst() override {
-    WriteBatchIndexEntry search_entry(
-        nullptr /* search_key */, column_family_id_,
-        true /* is_forward_direction */, true /* is_seek_to_first */);
+    WriteBatchIndexEntry search_entry(WriteBatchIndexEntry::kFlagMin,
+                                      column_family_id_, 0, 0);
     skip_list_iter_.Seek(&search_entry);
   }
 
   virtual void SeekToLast() override {
-    WriteBatchIndexEntry search_entry(
-        nullptr /* search_key */, column_family_id_ + 1,
-        true /* is_forward_direction */, true /* is_seek_to_first */);
+    WriteBatchIndexEntry search_entry(WriteBatchIndexEntry::kFlagMin,
+                                      column_family_id_ + 1, 0, 0);
     skip_list_iter_.Seek(&search_entry);
     if (!skip_list_iter_.Valid()) {
       skip_list_iter_.SeekToLast();
@@ -371,16 +369,12 @@ class WBWIIteratorImpl : public WBWIIterator {
   }
 
   virtual void Seek(const Slice& key) override {
-    WriteBatchIndexEntry search_entry(&key, column_family_id_,
-                                      true /* is_forward_direction */,
-                                      false /* is_seek_to_first */);
+    WriteBatchIndexEntry search_entry(&key, column_family_id_);
     skip_list_iter_.Seek(&search_entry);
   }
 
   virtual void SeekForPrev(const Slice& key) override {
-    WriteBatchIndexEntry search_entry(&key, column_family_id_,
-                                      false /* is_forward_direction */,
-                                      false /* is_seek_to_first */);
+    WriteBatchIndexEntry search_entry(&key, column_family_id_);
     skip_list_iter_.SeekForPrev(&search_entry);
   }
 
@@ -942,10 +936,6 @@ Status WriteBatchWithIndex::PopSavePoint() {
 
 void WriteBatchWithIndex::SetMaxBytes(size_t max_bytes) {
   rep->write_batch.SetMaxBytes(max_bytes);
-}
-
-size_t WriteBatchWithIndex::GetDataSize() const {
-  return rep->write_batch.GetDataSize();
 }
 
 }  // namespace rocksdb

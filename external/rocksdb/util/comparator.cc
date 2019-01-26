@@ -124,10 +124,6 @@ class BytewiseComparatorImpl : public Comparator {
       return false;
     }
   }
-
-  virtual bool CanKeysWithDifferentByteContentsBeEqual() const override {
-    return false;
-  }
 };
 
 class ReverseBytewiseComparatorImpl : public BytewiseComparatorImpl {
@@ -191,10 +187,6 @@ class ReverseBytewiseComparatorImpl : public BytewiseComparatorImpl {
 
   void FindShortSuccessor(std::string* /*key*/) const override {
     // Don't do anything for simplicity.
-  }
-
-  virtual bool CanKeysWithDifferentByteContentsBeEqual() const override {
-    return false;
   }
 };
 }// namespace

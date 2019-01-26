@@ -38,6 +38,7 @@ class TableReader;
 class InternalKeyComparator;
 class PlainTableKeyDecoder;
 class GetContext;
+class InternalIterator;
 
 using std::unique_ptr;
 using std::unordered_map;
@@ -48,7 +49,7 @@ struct PlainTableReaderFileInfo {
   bool is_mmap_mode;
   Slice file_data;
   uint32_t data_end_offset;
-  std::unique_ptr<RandomAccessFileReader> file;
+  unique_ptr<RandomAccessFileReader> file;
 
   PlainTableReaderFileInfo(unique_ptr<RandomAccessFileReader>&& _file,
                            const EnvOptions& storage_options,
@@ -71,8 +72,8 @@ class PlainTableReader: public TableReader {
   static Status Open(const ImmutableCFOptions& ioptions,
                      const EnvOptions& env_options,
                      const InternalKeyComparator& internal_comparator,
-                     std::unique_ptr<RandomAccessFileReader>&& file,
-                     uint64_t file_size, std::unique_ptr<TableReader>* table,
+                     unique_ptr<RandomAccessFileReader>&& file,
+                     uint64_t file_size, unique_ptr<TableReader>* table,
                      const int bloom_bits_per_key, double hash_table_ratio,
                      size_t index_sparseness, size_t huge_page_tlb_size,
                      bool full_scan_mode,
@@ -104,7 +105,7 @@ class PlainTableReader: public TableReader {
   }
 
   PlainTableReader(const ImmutableCFOptions& ioptions,
-                   std::unique_ptr<RandomAccessFileReader>&& file,
+                   unique_ptr<RandomAccessFileReader>&& file,
                    const EnvOptions& env_options,
                    const InternalKeyComparator& internal_comparator,
                    EncodingType encoding_type, uint64_t file_size,
@@ -153,8 +154,8 @@ class PlainTableReader: public TableReader {
   DynamicBloom bloom_;
   PlainTableReaderFileInfo file_info_;
   Arena arena_;
-  CacheAllocationPtr index_block_alloc_;
-  CacheAllocationPtr bloom_block_alloc_;
+  std::unique_ptr<char[]> index_block_alloc_;
+  std::unique_ptr<char[]> bloom_block_alloc_;
 
   const ImmutableCFOptions& ioptions_;
   uint64_t file_size_;

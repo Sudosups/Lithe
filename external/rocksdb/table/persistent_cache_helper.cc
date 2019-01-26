@@ -29,9 +29,12 @@ void PersistentCacheHelper::InsertUncompressedPage(
     const BlockContents& contents) {
   assert(cache_options.persistent_cache);
   assert(!cache_options.persistent_cache->IsCompressed());
-  // Precondition:
-  // (1) content is cacheable
-  // (2) content is not compressed
+  if (!contents.cachable || contents.compression_type != kNoCompression) {
+    // We shouldn't cache this. Either
+    // (1) content is not cacheable
+    // (2) content is compressed
+    return;
+  }
 
   // construct the page key
   char cache_key[BlockBasedTable::kMaxCacheKeyPrefixSize + kMaxVarint64Length];
@@ -106,7 +109,8 @@ Status PersistentCacheHelper::LookupUncompressedPage(
   // update stats
   RecordTick(cache_options.statistics, PERSISTENT_CACHE_HIT);
   // construct result and return
-  *contents = BlockContents(std::move(data), size);
+  *contents =
+      BlockContents(std::move(data), size, false /*cacheable*/, kNoCompression);
   return Status::OK();
 }
 
