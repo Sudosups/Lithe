@@ -1,7 +1,10 @@
-# The Lithe Project™ [![Build status](https://ci.appveyor.com/api/projects/status/wyrlv56t71apinth?svg=true)](https://ci.appveyor.com/project/Lithe-Project/lithe)
+
+# The Lithe Project™ [![Build status](https://ci.appveyor.com/api/projects/status/wyrlv56t71apinth?svg=true)](https://ci.appveyor.com/project/Lithe-Project/lithe) 
 ##### Its everything DASH intended to be but different and without Masternodes
 
 LITHE aims to study the best practices of the fiat world and work towards developing products to be user-friendly for the people. So even though people are using the LITHE crypto on the backend, they will have no problems interacting with it because of its elegent UI. LITHE is built upon the [TurtleCoin](https://github.com/turtlecoin/turtlecoin) network which has features like [Light Blocks](https://blog.turtlecoin.lol/archives/the-quest-for-lightning-block-propagation/), [Private Transactions](https://cryptonote.org/inside#unlinkable-transaction) and [Blockchain Analysis Resistance](https://cryptonote.org/inside#blockchain-analysis-resistance). LITHE only has a max supply of only 2.5 billion coins which means there is would be enough coins constantly flowing within the network but not too many that you would have to use more coins than expected to purchase. We know a one minor problem between cryptocurrency and normal people and that is it is like black magic to them, LITHE will change that so even your grandma can have a wallet and she would stil be able to buy them sweets for the grandkids just as easily as she would with her bank issues card. LITHE will be like the gateway to cryptocurrency in which it allows anyone and everyone the ability to benefit from it. 
+
+<img src="https://github.com/Lithe-Project/resources/blob/master/images/lithe-logo.png" alt="logo" width="75"/>
 
 ***
 
