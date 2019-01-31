@@ -31,7 +31,8 @@ Codebase
 | Discord | https://discord.gg/ArDF3gR |
 
 #### Donations
-
+| Coin | Address |
+|------|---------|
 | **LTC** | `LZKvFwC4dzs3VTrwsmpJ7LRjrtdN4YqcoF` |
 | **TRTL** | `TRTLuz8mzCcEuD3btCgodyHD8nLXRBCkqWbUMoB1oFarAyutYPVWep5NeeyKpmx4iJQT58sqLKda2W8oxoVch9sLNhvSUbBJGNp` |
 | **XMR** | `4Cf2TfMKhCgJ2vsM3HeBUnYe52tXrvv8X1ajjuQEMUQ8iU8kvUzCSsCEacxFhEmeb2JgPpQ5chdyw3UiTfUgapJBhCXRZgmqK643FxG7Bu` |
