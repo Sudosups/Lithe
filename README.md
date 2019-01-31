@@ -32,6 +32,10 @@ Codebase
 
 #### Donations
 
-**TRTL** - `TRTLuz8mzCcEuD3btCgodyHD8nLXRBCkqWbUMoB1oFarAyutYPVWep5NeeyKpmx4iJQT58sqLKda2W8oxoVch9sLNhvSUbBJGNp`
+| **LTC** | `LZKvFwC4dzs3VTrwsmpJ7LRjrtdN4YqcoF` |
+| **TRTL** | `TRTLuz8mzCcEuD3btCgodyHD8nLXRBCkqWbUMoB1oFarAyutYPVWep5NeeyKpmx4iJQT58sqLKda2W8oxoVch9sLNhvSUbBJGNp` |
+| **XMR** | `4Cf2TfMKhCgJ2vsM3HeBUnYe52tXrvv8X1ajjuQEMUQ8iU8kvUzCSsCEacxFhEmeb2JgPpQ5chdyw3UiTfUgapJBhCXRZgmqK643FxG7Bu` |
+| **NBX** | `Nib1ioi5t7hB8TYpFKa9bFcmitYepjmpBUtn3Xz3MSYsPTFwBD3fabC1nZgghr6YgpLJxWgNoh9w1UZ5uc4CLxVr6zQP1df9o6` |
+| **AMIT** | `amitJ4GHWyJKxaRCyMHwP1Ea5ugeXeYkUFfHJt3XadTER8SLsBux9gk3M56bNLMspN7LkxwM32SveP4gWRAehxeK4dyf3zRw3w` |
 
 ***
