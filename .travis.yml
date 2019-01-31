@@ -150,7 +150,7 @@ before_deploy:
 deploy:
   - provider: releases
     api_key:
-      secure: $github_secure
+      secure: ${github_secure}
      file:
       - lithe-${TRAVIS_TAG}-${LABEL}.tar.gz
     skip_cleanup: true
