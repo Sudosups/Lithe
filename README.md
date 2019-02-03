@@ -29,10 +29,13 @@ Codebase
 | Twitter | https://twitter.com/TheLitheProject |
 | GitHub  | https://github.com/lithe-project |
 | Discord | https://discord.gg/ArDF3gR |
+| Reddit  | https://reddit.com/r/lithe |
+| Paper Wallet | https://github.com/lithe-project/paper-wallet |
 
 #### Donations
 | Coin | Address |
 |------|---------|
+| **LITHE** | `ethiLDLvbaL6aBTbcauJ9HArFD48RXL1TGtReJXyxc8y4xcRdys1VpyPnaaechLeD3RQMJL6PGV5viRhUW2NaUmbbCnWfJnh5Xv` |
 | **LTC** | `LZKvFwC4dzs3VTrwsmpJ7LRjrtdN4YqcoF` |
 | **TRTL** | `TRTLuz8mzCcEuD3btCgodyHD8nLXRBCkqWbUMoB1oFarAyutYPVWep5NeeyKpmx4iJQT58sqLKda2W8oxoVch9sLNhvSUbBJGNp` |
 | **XMR** | `4Cf2TfMKhCgJ2vsM3HeBUnYe52tXrvv8X1ajjuQEMUQ8iU8kvUzCSsCEacxFhEmeb2JgPpQ5chdyw3UiTfUgapJBhCXRZgmqK643FxG7Bu` |
